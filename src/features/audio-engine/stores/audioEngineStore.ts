@@ -24,16 +24,18 @@ interface AudioEngineState {
   sources: Map<number, AudioSource>;
   isInitialized: boolean;
   globalVolume: number;
+  selectedElementId: number | null;
 
   initAudioContext: () => Promise<void>;
   loadAudioFile: (element: AudioElement, fileData: ArrayBuffer) => Promise<void>;
-  play: (elementId: number) => void;
+  play: (elementId: number) => Promise<void>;
   pause: (elementId: number) => void;
   stop: (elementId: number) => void;
   stopAll: () => void;
   toggleLoop: (elementId: number) => void;
   setVolume: (elementId: number, volume: number) => void;
   setGlobalVolume: (volume: number) => void;
+  setSelectedElementId: (id: number | null) => void;
   removeSource: (elementId: number) => void;
   cleanup: () => void;
 }
@@ -43,6 +45,9 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   sources: new Map(),
   isInitialized: false,
   globalVolume: 1.0,
+  selectedElementId: null,
+
+  setSelectedElementId: id => set({ selectedElementId: id }),
 
   initAudioContext: async () => {
     if (get().audioContext) return;
@@ -86,39 +91,66 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     }
   },
 
-  play: elementId => {
+  play: async elementId => {
+    console.log(`[AudioEngine] Attempting to play element: ${elementId}`);
     const { audioContext, sources } = get();
-    if (!audioContext) return;
+    if (!audioContext) {
+      console.error('[AudioEngine] Cannot play: audioContext is missing');
+      return;
+    }
+
+    if (audioContext.state === 'suspended') {
+      console.log('[AudioEngine] Resuming suspended audioContext');
+      await audioContext.resume();
+    }
 
     const source = sources.get(elementId);
-    if (!source || !source.buffer) return;
+    if (!source) {
+      console.error(`[AudioEngine] Cannot play: source ${elementId} not found in store`);
+      return;
+    }
+
+    if (!source.buffer) {
+      console.error(`[AudioEngine] Cannot play: source ${elementId} has a null audio buffer`);
+      return;
+    }
 
     if (source.sourceNode) {
       try {
+        console.log(`[AudioEngine] Stopping existing source node for ${elementId}`);
         source.sourceNode.stop();
-      } catch {
-        // Ignore if already stopped
+      } catch (e) {
+        console.warn(`[AudioEngine] Could not stop existing node:`, e);
       }
     }
 
-    const sourceNode = audioContext.createBufferSource();
-    sourceNode.buffer = source.buffer;
-    sourceNode.loop = source.isLooping;
-    sourceNode.connect(source.gainNode);
-    sourceNode.start();
+    try {
+      console.log(`[AudioEngine] Creating new BufferSource for ${elementId}`);
+      const sourceNode = audioContext.createBufferSource();
+      sourceNode.buffer = source.buffer;
+      sourceNode.loop = source.isLooping;
+      sourceNode.connect(source.gainNode);
 
-    source.sourceNode = sourceNode;
-    source.isPlaying = true;
+      console.log(`[AudioEngine] Starting source node for ${elementId}...`);
+      sourceNode.start();
 
-    sourceNode.onended = () => {
-      if (!sourceNode.loop) {
-        source.isPlaying = false;
-        source.sourceNode = null;
-        set({ sources: new Map(sources) });
-      }
-    };
+      source.sourceNode = sourceNode;
+      source.isPlaying = true;
 
-    set({ sources: new Map(sources) });
+      sourceNode.onended = () => {
+        console.log(`[AudioEngine] Track ended for ${elementId} (loop=${sourceNode.loop})`);
+        if (!sourceNode.loop) {
+          source.isPlaying = false;
+          source.sourceNode = null;
+          set({ sources: new Map(sources) });
+        }
+      };
+
+      set({ sources: new Map(sources) });
+      console.log(`[AudioEngine] Successfully started playback for ${elementId}`);
+    } catch (e) {
+      console.error(`[AudioEngine] Fatal error during playback for ${elementId}:`, e);
+    }
   },
 
   pause: elementId => {

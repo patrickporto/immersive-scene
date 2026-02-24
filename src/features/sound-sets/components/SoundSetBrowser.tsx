@@ -1,19 +1,24 @@
 import { useState } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
-import { Folder, Plus, Smile, Trash2 } from 'lucide-react';
+import { Music, Plus, Trash2 } from 'lucide-react';
 
 import { Cluster } from '../../../shared/components/layout/Cluster';
 import { Stack } from '../../../shared/components/layout/Stack';
+import { useToast } from '../../../shared/hooks/useToast';
+import { cn } from '../../../shared/utils/cn';
 import { useSoundSetStore } from '../stores/soundSetStore';
 
-export function SoundSetBrowser() {
+interface SoundSetBrowserProps {
+  isCollapsed?: boolean;
+}
+
+export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
   const {
     soundSets,
     moods,
     selectedSoundSet,
     selectedMood,
-    isLoading,
     selectSoundSet,
     selectMood,
     createSoundSet,
@@ -22,6 +27,7 @@ export function SoundSetBrowser() {
     loadMoods,
   } = useSoundSetStore();
 
+  const { success, error } = useToast();
   const [isCreatingSoundSet, setIsCreatingSoundSet] = useState(false);
   const [isCreatingMood, setIsCreatingMood] = useState(false);
   const [newName, setNewName] = useState('');
@@ -29,238 +35,291 @@ export function SoundSetBrowser() {
 
   const handleCreateSoundSet = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim()) return;
+    if (!newName.trim()) {
+      error('Please enter a name');
+      return;
+    }
 
-    await createSoundSet(newName, newDescription);
-    setNewName('');
-    setNewDescription('');
-    setIsCreatingSoundSet(false);
+    try {
+      console.log('Creating SoundSet:', newName);
+      await createSoundSet(newName, newDescription);
+      console.log('SoundSet created successfully');
+      console.log('Current soundSets:', soundSets.length);
+      success(`SoundSet "${newName}" created`);
+      setNewName('');
+      setNewDescription('');
+      setIsCreatingSoundSet(false);
+    } catch (err) {
+      console.error('Failed to create SoundSet:', err);
+      error('Failed to create SoundSet: ' + String(err));
+    }
   };
 
   const handleCreateMood = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim() || !selectedSoundSet) return;
 
-    await createMood(selectedSoundSet.id, newName, newDescription);
-    await loadMoods(selectedSoundSet.id);
-    setNewName('');
-    setNewDescription('');
-    setIsCreatingMood(false);
+    try {
+      await createMood(selectedSoundSet.id, newName, newDescription);
+      await loadMoods(selectedSoundSet.id);
+      success(`Mood "${newName}" added`);
+      setNewName('');
+      setNewDescription('');
+      setIsCreatingMood(false);
+    } catch {
+      error('Failed to create Mood');
+    }
   };
 
-  return (
-    <Stack className="h-full bg-[#12121a]">
-      {/* Header */}
-      <Cluster
-        gap={2}
-        justify="between"
-        className="p-4 border-b border-[rgba(255,255,255,0.08)] shrink-0"
-      >
-        <h2 className="text-xs font-bold text-[#64748b] uppercase tracking-widest">SoundSets</h2>
+  const handleDeleteSoundSet = async (id: number, name: string) => {
+    try {
+      await deleteSoundSet(id);
+      success(`SoundSet "${name}" deleted`);
+    } catch {
+      error('Failed to delete SoundSet');
+    }
+  };
+
+  if (isCollapsed) {
+    return (
+      <Stack className="h-full items-center py-4" gap={6}>
         <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          onClick={() => setIsCreatingSoundSet(true)}
-          className="btn btn--ghost text-xs py-1.5 px-2"
+          whileHover={{ scale: 1.1 }}
+          onClick={() => setIsCreatingSoundSet(!isCreatingSoundSet)}
+          className="p-2 bg-cyan-500/10 rounded-lg text-cyan-400 border border-cyan-500/20"
         >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Novo</span>
+          <Plus className="w-5 h-5" />
         </motion.button>
+
+        <Stack className="flex-1 items-center overflow-y-auto no-scrollbar" gap={3}>
+          {soundSets.map(soundSet => (
+            <motion.div
+              key={soundSet.id}
+              onClick={() => selectSoundSet(soundSet)}
+              className={cn(
+                'w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer transition-all border',
+                selectedSoundSet?.id === soundSet.id
+                  ? 'bg-cyan-500 border-cyan-400 shadow-[0_0_15px_rgba(0,212,255,0.4)] text-black'
+                  : 'bg-black/40 border-white/5 text-gray-500 hover:text-white hover:border-white/20'
+              )}
+              title={soundSet.name}
+            >
+              <Music className="w-5 h-5" />
+            </motion.div>
+          ))}
+        </Stack>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack className="h-full bg-[#0f0f15]" gap={0}>
+      {/* SoundSets Header */}
+      <Cluster
+        className="px-4 py-3 border-b border-white/5 bg-black/20"
+        justify="between"
+        align="center"
+      >
+        <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">
+          SoundSets
+        </h2>
       </Cluster>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        <AnimatePresence initial={false}>
-          {isCreatingSoundSet && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="overflow-hidden mb-2"
-            >
-              <form onSubmit={handleCreateSoundSet} className="card space-y-3">
-                <Stack gap={2}>
+      {/* Main Content */}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <Stack className="p-4" gap={3}>
+          {/* Add SoundSet Button/Form */}
+          <AnimatePresence mode="wait">
+            {!isCreatingSoundSet ? (
+              <motion.div
+                layout
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                onClick={() => setIsCreatingSoundSet(true)}
+                className="group cursor-pointer transition-all border border-dashed border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5 rounded-xl"
+              >
+                <Cluster className="px-4 py-3" gap={2} justify="center">
+                  <Plus className="w-4 h-4 text-gray-500 group-hover:text-cyan-400 transition-colors" />
+                  <span className="text-xs font-bold text-gray-500 group-hover:text-cyan-400 transition-colors">
+                    Add SoundSet
+                  </span>
+                </Cluster>
+              </motion.div>
+            ) : (
+              <motion.form
+                layout
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                onSubmit={handleCreateSoundSet}
+                className="p-4 rounded-xl bg-black/40 border border-cyan-500/30 shadow-[0_0_15px_rgba(0,212,255,0.1)]"
+              >
+                <Stack gap={3}>
                   <input
                     type="text"
-                    placeholder="Nome do SoundSet"
+                    placeholder="New SoundSet..."
                     value={newName}
                     onChange={e => setNewName(e.target.value)}
-                    className="w-full"
                     autoFocus
+                    className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:border-cyan-500/50 outline-none"
                   />
-                  <input
-                    type="text"
-                    placeholder="Descrição (opcional)"
-                    value={newDescription}
-                    onChange={e => setNewDescription(e.target.value)}
-                    className="w-full"
-                  />
+                  <Cluster justify="between" gap={2}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCreatingSoundSet(false);
+                        setNewName('');
+                      }}
+                      className="flex-1 text-[10px] font-bold uppercase py-2 rounded text-gray-500 hover:text-white hover:bg-white/5 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 bg-cyan-500 text-black text-[10px] font-bold uppercase py-2 rounded shadow-lg shadow-cyan-500/20 hover:bg-cyan-400 transition-colors"
+                    >
+                      Create
+                    </button>
+                  </Cluster>
                 </Stack>
-                <Cluster gap={2} justify="end">
-                  <button
-                    type="button"
-                    onClick={() => setIsCreatingSoundSet(false)}
-                    className="btn btn--ghost text-xs"
-                  >
-                    Cancelar
-                  </button>
-                  <button type="submit" className="btn btn--primary text-xs">
-                    Criar
-                  </button>
-                </Cluster>
-              </form>
-            </motion.div>
-          )}
+              </motion.form>
+            )}
+          </AnimatePresence>
 
-          {isLoading && soundSets.length === 0 ? (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center text-[#64748b] py-8 text-sm"
-            >
-              Carregando...
-            </motion.div>
-          ) : (
-            soundSets.map(soundSet => (
+          {/* SoundSets List */}
+          <Stack className="overflow-y-auto custom-scrollbar" gap={2}>
+            {soundSets.length === 0 && (
+              <div className="text-center py-8 text-gray-600 text-sm">
+                No SoundSets yet. Create one above!
+              </div>
+            )}
+            {soundSets.map(soundSet => (
               <motion.div
                 layout
                 key={soundSet.id}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                className="group/item"
+                onClick={() => selectSoundSet(soundSet)}
+                className={cn(
+                  'group relative cursor-pointer transition-all border rounded-xl',
+                  selectedSoundSet?.id === soundSet.id
+                    ? 'bg-cyan-500/10 border-cyan-500/30 text-white shadow-[0_0_15px_rgba(0,212,255,0.1)]'
+                    : 'bg-transparent border-transparent text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'
+                )}
               >
-                <div
-                  onClick={() => selectSoundSet(soundSet)}
-                  className={`
-                    relative px-3 py-2.5 rounded-lg cursor-pointer transition-all duration-200 flex items-center justify-between group/row border
-                    ${
-                      selectedSoundSet?.id === soundSet.id
-                        ? 'bg-[#6366f1]/10 border-[#6366f1]/20 text-[#e0e7ff] shadow-sm'
-                        : 'bg-transparent border-transparent text-[#64748b] hover:bg-white/[0.05] hover:text-[#94a3b8] hover:border-[rgba(255,255,255,0.05)]'
-                    }
-                  `}
-                >
-                  <Cluster gap={3}>
-                    <Folder
-                      className={`w-4 h-4 shrink-0 ${
-                        selectedSoundSet?.id === soundSet.id ? 'text-[#818cf8]' : 'text-[#475569]'
-                      }`}
-                    />
-                    <span className="truncate text-sm font-medium">{soundSet.name}</span>
-                  </Cluster>
-
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
+                <Cluster className="px-4 py-3" justify="between" align="center">
+                  <span className="text-sm font-bold truncate tracking-tight">{soundSet.name}</span>
+                  <Trash2
+                    className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all flex-shrink-0"
                     onClick={e => {
                       e.stopPropagation();
-                      deleteSoundSet(soundSet.id);
+                      handleDeleteSoundSet(soundSet.id, soundSet.name);
                     }}
-                    className="opacity-0 group-hover/row:opacity-100 p-1 rounded-md hover:bg-[#ef4444]/10 transition-all text-[#475569] hover:text-[#ef4444]"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </motion.button>
+                  />
+                </Cluster>
 
-                  {/* Active Indicator */}
-                  {selectedSoundSet?.id === soundSet.id && (
-                    <motion.div
-                      layoutId="activeIndicator"
-                      className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-6 bg-[#6366f1] rounded-r-full"
-                    />
-                  )}
-                </div>
+                {selectedSoundSet?.id === soundSet.id && (
+                  <motion.div
+                    layoutId="activeSoundSet"
+                    className="absolute left-0 top-2 bottom-2 w-0.5 bg-cyan-500 rounded-full shadow-[0_0_10px_rgba(0,212,255,1)]"
+                  />
+                )}
+              </motion.div>
+            ))}
+          </Stack>
+        </Stack>
 
-                {/* Moods Sub-list */}
-                <AnimatePresence>
-                  {selectedSoundSet?.id === soundSet.id && (
+        {/* Moods Section */}
+        <AnimatePresence>
+          {selectedSoundSet && (
+            <motion.div
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 20, opacity: 0 }}
+              className="border-t border-white/10 bg-black/40 flex-1 flex flex-col min-h-0"
+            >
+              <Cluster
+                className="px-4 py-3 border-b border-white/5 bg-black/20"
+                justify="between"
+                align="center"
+              >
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                  Moods
+                </span>
+              </Cluster>
+              <Stack className="flex-1 overflow-y-auto p-4 custom-scrollbar" gap={2}>
+                <AnimatePresence mode="wait">
+                  {!isCreatingMood ? (
                     <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="overflow-hidden ml-4 pl-4 border-l border-[rgba(255,255,255,0.08)] my-1 space-y-0.5"
+                      layout
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      onClick={() => setIsCreatingMood(true)}
+                      className="group cursor-pointer transition-all border border-dashed border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/5 rounded-lg"
                     >
-                      {moods.map(mood => (
-                        <motion.div
-                          key={mood.id}
-                          initial={{ opacity: 0, x: -10 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          onClick={() => selectMood(mood)}
-                          className={`
-                            px-3 py-2 rounded-md cursor-pointer text-sm transition-all duration-200 flex items-center gap-2 border
-                            ${
-                              selectedMood?.id === mood.id
-                                ? 'bg-[#6366f1]/10 text-[#c7d2fe] border-[#6366f1]/20 font-medium'
-                                : 'bg-transparent text-[#475569] border-transparent hover:text-[#94a3b8] hover:bg-white/[0.03]'
-                            }
-                          `}
-                        >
-                          <Smile
-                            className={`w-3.5 h-3.5 ${
-                              selectedMood?.id === mood.id ? 'text-[#818cf8]' : 'text-[#334155]'
-                            }`}
-                          />
-                          <span className="truncate">{mood.name}</span>
-                        </motion.div>
-                      ))}
-
-                      {/* Add Mood Button/Form */}
-                      {isCreatingMood ? (
-                        <motion.form
-                          initial={{ opacity: 0, y: -5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          onSubmit={handleCreateMood}
-                          className="mt-2 p-2 bg-[#1a1a25] rounded-lg border border-[rgba(255,255,255,0.08)] space-y-2"
-                        >
-                          <input
-                            type="text"
-                            placeholder="Nome do Mood"
-                            value={newName}
-                            onChange={e => setNewName(e.target.value)}
-                            className="w-full text-xs py-1.5 px-2"
-                            autoFocus
-                          />
-                          <Cluster gap={2} justify="end">
-                            <button
-                              type="button"
-                              onClick={() => setIsCreatingMood(false)}
-                              className="text-[10px] font-medium text-[#64748b] hover:text-white uppercase tracking-wider px-2 py-1"
-                            >
-                              Cancelar
-                            </button>
-                            <button
-                              type="submit"
-                              className="text-[10px] font-bold text-[#818cf8] hover:text-[#a5b4fc] uppercase tracking-wider px-2 py-1"
-                            >
-                              Salvar
-                            </button>
-                          </Cluster>
-                        </motion.form>
-                      ) : (
-                        <motion.button
-                          whileHover={{ x: 2 }}
-                          onClick={() => setIsCreatingMood(true)}
-                          className="w-full text-left px-3 py-2 text-xs font-medium text-[#475569] hover:text-[#818cf8] transition-colors flex items-center gap-2 mt-1 opacity-70 hover:opacity-100"
-                        >
-                          <Plus className="w-3 h-3" />
-                          Adicionar Mood
-                        </motion.button>
-                      )}
+                      <Cluster className="px-4 py-2" gap={2} justify="center">
+                        <Plus className="w-3 h-3 text-gray-500 group-hover:text-cyan-400 transition-colors" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500 group-hover:text-cyan-400 transition-colors">
+                          Add Mood
+                        </span>
+                      </Cluster>
                     </motion.div>
+                  ) : (
+                    <motion.form
+                      layout
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      onSubmit={handleCreateMood}
+                      className="p-3 bg-black/40 rounded-lg border border-cyan-500/30"
+                    >
+                      <Stack gap={2}>
+                        <input
+                          type="text"
+                          placeholder="New Mood..."
+                          value={newName}
+                          onChange={e => setNewName(e.target.value)}
+                          autoFocus
+                          className="w-full bg-black/40 border border-white/10 rounded px-3 py-1.5 text-xs text-white placeholder:text-gray-600 focus:border-cyan-500/50 outline-none"
+                        />
+                        <Cluster justify="between" gap={2}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsCreatingMood(false);
+                              setNewName('');
+                            }}
+                            className="flex-1 text-[9px] font-bold uppercase py-1.5 rounded text-gray-500 hover:text-white hover:bg-white/5 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            className="flex-1 bg-cyan-500 text-black text-[9px] font-bold uppercase py-1.5 rounded hover:bg-cyan-400 transition-colors"
+                          >
+                            Create
+                          </button>
+                        </Cluster>
+                      </Stack>
+                    </motion.form>
                   )}
                 </AnimatePresence>
-              </motion.div>
-            ))
-          )}
 
-          {soundSets.length === 0 && !isCreatingSoundSet && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex flex-col items-center justify-center py-12 text-[#475569] gap-2"
-            >
-              <Folder className="w-8 h-8 opacity-20" />
-              <p className="text-xs font-medium">Nenhum SoundSet</p>
+                {moods.map(mood => (
+                  <div
+                    key={mood.id}
+                    onClick={() => selectMood(mood)}
+                    className={cn(
+                      'px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest cursor-pointer transition-all border',
+                      selectedMood?.id === mood.id
+                        ? 'bg-cyan-500 text-black shadow-[0_0_20px_rgba(0,212,255,0.4)] border-transparent'
+                        : 'text-gray-500 hover:bg-white/[0.03] border-transparent'
+                    )}
+                  >
+                    {mood.name}
+                  </div>
+                ))}
+              </Stack>
             </motion.div>
           )}
         </AnimatePresence>

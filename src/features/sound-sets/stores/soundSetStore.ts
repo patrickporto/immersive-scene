@@ -67,11 +67,14 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
   error: null,
 
   loadSoundSets: async () => {
+    console.log('Store: Loading soundsets...');
     set({ isLoading: true, error: null });
     try {
       const soundSets = await invoke<SoundSet[]>('get_sound_sets');
+      console.log('Store: Loaded', soundSets.length, 'soundsets');
       set({ soundSets, isLoading: false });
     } catch (error) {
+      console.error('Store: Failed to load soundsets:', error);
       set({ error: String(error), isLoading: false });
     }
   },
