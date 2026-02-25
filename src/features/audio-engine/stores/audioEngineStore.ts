@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 export interface AudioElement {
   id: number;
-  mood_id: number;
+  sound_set_id: number;
   file_path: string;
   file_name: string;
   channel_type: 'music' | 'ambient' | 'effects' | 'creatures' | 'voice';
@@ -38,6 +38,10 @@ interface AudioEngineState {
   setSelectedElementId: (id: number | null) => void;
   removeSource: (elementId: number) => void;
   cleanup: () => void;
+  crossfadeToTimeline: (
+    timelineElements: { audio_element_id: number; start_time_ms: number }[]
+  ) => void;
+  playScheduled: (elementId: number, delayMs: number, fadeInDuration?: number) => Promise<void>;
 }
 
 export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
@@ -81,7 +85,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         sourceNode: null,
         gainNode,
         isPlaying: false,
-        isLooping: true, // Default to looping for ambient/background
+        isLooping: false, // Default to false globally
       };
 
       sources.set(element.id, source);
@@ -259,5 +263,91 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
 
     audioContext?.close();
     set({ audioContext: null, sources: new Map(), isInitialized: false });
+  },
+
+  playScheduled: async (elementId, delayMs, fadeInDuration = 0) => {
+    const { audioContext, sources } = get();
+    if (!audioContext || audioContext.state === 'suspended') return;
+
+    const source = sources.get(elementId);
+    if (!source || !source.buffer) return;
+
+    if (source.sourceNode) {
+      try {
+        source.sourceNode.stop();
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
+      const sourceNode = audioContext.createBufferSource();
+      sourceNode.buffer = source.buffer;
+      sourceNode.loop = source.isLooping;
+      sourceNode.connect(source.gainNode);
+
+      const startTime = audioContext.currentTime + delayMs / 1000;
+
+      if (fadeInDuration > 0) {
+        source.gainNode.gain.setValueAtTime(0, startTime);
+        source.gainNode.gain.linearRampToValueAtTime(1, startTime + fadeInDuration);
+      } else {
+        source.gainNode.gain.value = 1;
+      }
+
+      sourceNode.start(startTime);
+      source.sourceNode = sourceNode;
+      source.isPlaying = true;
+
+      sourceNode.onended = () => {
+        if (!sourceNode.loop) {
+          source.isPlaying = false;
+          source.sourceNode = null;
+          set({ sources: new Map(sources) });
+        }
+      };
+
+      set({ sources: new Map(sources) });
+    } catch (e) {
+      console.error(`[AudioEngine] Failed to schedule timeline element ${elementId}:`, e);
+    }
+  },
+
+  crossfadeToTimeline: timelineElements => {
+    const { audioContext, sources, playScheduled } = get();
+    if (!audioContext) return;
+
+    const now = audioContext.currentTime;
+    const fadeOutDuration = 2.0; // 2 seconds crossfade
+
+    // Fade out all currently playing
+    sources.forEach(source => {
+      if (source.isPlaying && source.gainNode) {
+        source.gainNode.gain.cancelScheduledValues(now);
+        source.gainNode.gain.setValueAtTime(source.gainNode.gain.value, now);
+        source.gainNode.gain.linearRampToValueAtTime(0, now + fadeOutDuration);
+
+        setTimeout(() => {
+          if (source.sourceNode) {
+            try {
+              source.sourceNode.stop();
+            } catch {
+              // ignore
+            }
+            source.isPlaying = false;
+            source.sourceNode = null;
+          }
+        }, fadeOutDuration * 1000);
+      }
+    });
+
+    // Schedule new timeline elements with fade in if they start at 0
+    setTimeout(() => {
+      timelineElements.forEach(te => {
+        // if element starts within the crossfade window, fade it in
+        const fadeIn = te.start_time_ms < fadeOutDuration * 1000 ? fadeOutDuration : 0;
+        playScheduled(te.audio_element_id, te.start_time_ms, fadeIn);
+      });
+    }, 100); // slight delay to let audio buffer catch up
   },
 }));

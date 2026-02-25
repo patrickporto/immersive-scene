@@ -7,9 +7,11 @@ import { Cluster } from '../../../shared/components/layout/Cluster';
 import { Stack } from '../../../shared/components/layout/Stack';
 import { useAudioEngineStore } from '../../audio-engine/stores/audioEngineStore';
 import { useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
+import { useTimelineStore } from '../../sound-sets/stores/timelineStore';
 
 export function BottomPlayer() {
   const { selectedSoundSet, selectedMood } = useSoundSetStore();
+  const { selectedTimelineId, timelines } = useTimelineStore();
   const { sources, stopAll, globalVolume, setGlobalVolume } = useAudioEngineStore();
 
   const [isMasterMuted, setIsMasterMuted] = useState(false);
@@ -59,6 +61,14 @@ export function BottomPlayer() {
               </p>
               <p className="text-xs text-gray-500 truncate font-medium tracking-wide">
                 {selectedMood ? selectedMood.name : 'No Mood Selected'}
+                {selectedTimelineId && (
+                  <>
+                    <span className="mx-2">•</span>
+                    <span className="text-cyan-400">
+                      Timeline: {timelines.find(t => t.id === selectedTimelineId)?.name}
+                    </span>
+                  </>
+                )}
                 <span className="mx-2">•</span>
                 {playingCount} channels active
               </p>

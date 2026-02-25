@@ -71,7 +71,9 @@ export default function App() {
             </div>
           )}
 
-          {selectedSoundSet && selectedMood && <AudioUploader moodId={selectedMood.id} />}
+          {selectedSoundSet && selectedMood && (
+            <AudioUploader soundSetId={selectedSoundSet.id} moodId={selectedMood.id} />
+          )}
         </div>
 
         {/* Player */}

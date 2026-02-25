@@ -18,7 +18,7 @@ export interface Mood {
 
 export interface AudioElement {
   id: number;
-  mood_id: number;
+  sound_set_id: number;
   file_path: string;
   file_name: string;
   channel_type: 'music' | 'ambient' | 'effects' | 'creatures' | 'voice';
@@ -45,14 +45,18 @@ interface SoundSetState {
   createMood: (soundSetId: number, name: string, description: string) => Promise<void>;
   selectMood: (mood: Mood | null) => void;
 
-  loadAudioElements: (moodId: number) => Promise<void>;
+  loadAudioElements: (soundSetId: number) => Promise<void>;
   createAudioElement: (
-    moodId: number,
+    soundSetId: number,
     filePath: string,
     fileName: string,
     channelType: AudioElement['channel_type']
   ) => Promise<void>;
   deleteAudioElement: (id: number) => Promise<void>;
+  updateAudioElementChannel: (
+    id: number,
+    channelType: AudioElement['channel_type']
+  ) => Promise<void>;
 
   clearError: () => void;
 }
@@ -115,6 +119,7 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
     set({ selectedSoundSet: soundSet, moods: [], selectedMood: null, audioElements: [] });
     if (soundSet) {
       get().loadMoods(soundSet.id);
+      get().loadAudioElements(soundSet.id);
     }
   },
 
@@ -146,27 +151,24 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
   },
 
   selectMood: mood => {
-    set({ selectedMood: mood, audioElements: [] });
-    if (mood) {
-      get().loadAudioElements(mood.id);
-    }
+    set({ selectedMood: mood });
   },
 
-  loadAudioElements: async moodId => {
+  loadAudioElements: async soundSetId => {
     set({ isLoading: true, error: null });
     try {
-      const audioElements = await invoke<AudioElement[]>('get_audio_elements', { moodId });
+      const audioElements = await invoke<AudioElement[]>('get_audio_elements', { soundSetId });
       set({ audioElements, isLoading: false });
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }
   },
 
-  createAudioElement: async (moodId, filePath, fileName, channelType) => {
+  createAudioElement: async (soundSetId, filePath, fileName, channelType) => {
     set({ isLoading: true, error: null });
     try {
       const newElement = await invoke<AudioElement>('create_audio_element', {
-        moodId,
+        soundSetId,
         filePath,
         fileName,
         channelType,
@@ -186,6 +188,21 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
       await invoke('delete_audio_element', { id });
       set(state => ({
         audioElements: state.audioElements.filter(el => el.id !== id),
+        isLoading: false,
+      }));
+    } catch (error) {
+      set({ error: String(error), isLoading: false });
+    }
+  },
+
+  updateAudioElementChannel: async (id, channelType) => {
+    set({ isLoading: true, error: null });
+    try {
+      await invoke('update_audio_element_channel', { id, channelType });
+      set(state => ({
+        audioElements: state.audioElements.map(el =>
+          el.id === id ? { ...el, channel_type: channelType } : el
+        ),
         isLoading: false,
       }));
     } catch (error) {
