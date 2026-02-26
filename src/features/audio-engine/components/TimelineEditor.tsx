@@ -11,6 +11,7 @@ import {
   IconRepeat,
   IconPause,
 } from '../../../shared/components/Icons';
+import { Tooltip } from '../../../shared/components/Tooltip';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
 import { useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
@@ -465,27 +466,35 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                                             initial={{ opacity: 0, scale: 0.9 }}
                                             animate={{ opacity: 1, scale: 1, x: 0 }}
                                             exit={{ opacity: 0, scale: 0.8 }}
+                                            transition={{ duration: 0.0 }}
                                             drag="x"
                                             dragMomentum={false}
                                             dragElastic={0}
-                                            onDragEnd={(_e, _info) => {
+                                            dragSnapToOrigin={true}
+                                            onDragStart={() => stopAll()}
+                                            whileDrag={{
+                                              scale: 1.02,
+                                              opacity: 0.9,
+                                              zIndex: 50,
+                                              boxShadow: '0 10px 25px -5px rgba(34, 211, 238, 0.3)',
+                                            }}
+                                            onDragEnd={(_e, info) => {
                                               const container = document.getElementById(
                                                 `timeline-track-container-${track.id}`
                                               );
                                               if (!container) return;
-                                              const trackWidth = container.scrollWidth;
-
                                               const targetElement = document.getElementById(
                                                 `clip-card-${te.id}`
                                               );
                                               if (!targetElement) return;
 
-                                              const elRect = targetElement.getBoundingClientRect();
                                               const trackRect = container.getBoundingClientRect();
+                                              const trackWidth = trackRect.width;
 
-                                              let dropX =
-                                                elRect.left - trackRect.left + container.scrollLeft;
-                                              dropX = Math.max(0, dropX);
+                                              // Calculate using initial exact position + exact drag delta
+                                              const currentLeftPx =
+                                                (te.start_time_ms / 60000) * trackWidth;
+                                              const dropX = currentLeftPx + info.offset.x;
 
                                               const percentage = Math.max(
                                                 0,
@@ -495,8 +504,11 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                                                 (percentage / 100) * 60000
                                               );
 
-                                              const snappedStartMs =
-                                                Math.round(newStartTimeMs / 100) * 100;
+                                              // Snap to 1000ms (1 second) and enforce bounds >= 0
+                                              const snappedStartMs = Math.max(
+                                                0,
+                                                Math.round(newStartTimeMs / 1000) * 1000
+                                              );
 
                                               updateElementTimeAndDuration(
                                                 te.id,
@@ -511,17 +523,25 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                                               touchAction: 'none', // Important for framer-motion drag on some devices
                                             }}
                                           >
-                                            <div className="w-5 h-5 ml-1 rounded-full bg-cyan-500/20 flex flex-col items-center justify-center text-cyan-400 shrink-0 pointer-events-none">
-                                              <IconPlay className="w-2.5 h-2.5 ml-0.5" />
-                                            </div>
-                                            <div className="flex-1 min-w-0 pointer-events-none">
-                                              <div className="text-[10px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
-                                                {el.file_name.split('.')[0]}
+                                            <Tooltip
+                                              content={el.file_name}
+                                              delay={0.2}
+                                              position="top"
+                                            >
+                                              <div className="flex items-center w-full h-full cursor-grab active:cursor-grabbing">
+                                                <div className="w-5 h-5 ml-1 rounded-full bg-cyan-500/20 flex flex-col items-center justify-center text-cyan-400 shrink-0 pointer-events-none">
+                                                  <IconPlay className="w-2.5 h-2.5 ml-0.5" />
+                                                </div>
+                                                <div className="flex-1 min-w-0 pointer-events-none ml-1.5 flex flex-col justify-center">
+                                                  <div className="text-[10px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
+                                                    {el.file_name.split('.')[0]}
+                                                  </div>
+                                                  <div className="text-[8px] text-cyan-500 font-mono tracking-wider truncate">
+                                                    {(te.start_time_ms / 1000).toFixed(1)}s
+                                                  </div>
+                                                </div>
                                               </div>
-                                              <div className="text-[8px] text-cyan-500 font-mono tracking-wider truncate">
-                                                {(te.start_time_ms / 1000).toFixed(1)}s
-                                              </div>
-                                            </div>
+                                            </Tooltip>
                                             <button
                                               onClick={e => {
                                                 e.stopPropagation();
