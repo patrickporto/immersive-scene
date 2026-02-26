@@ -17,6 +17,7 @@ interface AudioSource {
   gainNode: GainNode;
   isPlaying: boolean;
   isLooping: boolean;
+  activeScheduledCount: number;
 }
 
 interface AudioEngineState {
@@ -105,6 +106,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         gainNode,
         isPlaying: false,
         isLooping: false, // Default to false globally
+        activeScheduledCount: 0,
       };
 
       sources.set(element.id, source);
@@ -163,7 +165,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       sourceNode.onended = () => {
         console.log(`[AudioEngine] Track ended for ${elementId} (loop=${sourceNode.loop})`);
         if (!sourceNode.loop) {
-          source.isPlaying = false;
+          source.isPlaying = source.activeScheduledCount > 0;
           source.sourceNode = null;
           set({ sources: new Map(sources) });
         }
@@ -182,8 +184,8 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     if (source?.sourceNode) {
       try {
         source.sourceNode.stop();
-        source.isPlaying = false;
         source.sourceNode = null;
+        source.isPlaying = source.activeScheduledCount > 0;
         set({ sources: new Map(sources) });
       } catch {
         // Ignore errors
@@ -201,7 +203,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         // Ignore
       }
       source.sourceNode = null;
-      source.isPlaying = false;
+      source.isPlaying = source.activeScheduledCount > 0;
       set({ sources: new Map(sources) });
     }
   },
@@ -333,14 +335,6 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     const source = sources.get(elementId);
     if (!source || !source.buffer) return;
 
-    if (source.sourceNode) {
-      try {
-        source.sourceNode.stop();
-      } catch {
-        // ignore
-      }
-    }
-
     try {
       const sourceNode = audioContext.createBufferSource();
       sourceNode.buffer = source.buffer;
@@ -361,15 +355,13 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       sourceNode.start(startTime);
       sourceNode.stop(stopTime);
 
-      source.sourceNode = sourceNode;
+      source.activeScheduledCount += 1;
       source.isPlaying = true;
 
       sourceNode.onended = () => {
-        if (!sourceNode.loop) {
-          source.isPlaying = false;
-          source.sourceNode = null;
-          set({ sources: new Map(sources) });
-        }
+        source.activeScheduledCount = Math.max(0, source.activeScheduledCount - 1);
+        source.isPlaying = Boolean(source.sourceNode) || source.activeScheduledCount > 0;
+        set({ sources: new Map(sources) });
       };
 
       set({ sources: new Map(sources) });
