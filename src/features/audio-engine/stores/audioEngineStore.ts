@@ -18,6 +18,7 @@ interface AudioSource {
   isPlaying: boolean;
   isLooping: boolean;
   activeScheduledCount: number;
+  scheduledNodes: { node: AudioBufferSourceNode; start: number; stop: number }[];
 }
 
 export interface PlaybackContext {
@@ -32,6 +33,7 @@ interface AudioEngineState {
   isInitialized: boolean;
   globalVolume: number;
   selectedElementId: number | null;
+  stateSyncInterval: number | null;
 
   initAudioContext: () => Promise<void>;
   loadAudioFile: (element: AudioElement, fileData: ArrayBuffer) => Promise<void>;
@@ -75,6 +77,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   isInitialized: false,
   globalVolume: 1.0,
   selectedElementId: null,
+  stateSyncInterval: null,
   activeTimelineLoopTimeout: null,
   isTimelinePlaying: false,
   isTimelinePaused: false,
@@ -97,7 +100,37 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       await audioContext.resume();
     }
 
-    set({ audioContext, isInitialized: true });
+    const stateSyncInterval = window.setInterval(() => {
+      const { sources, audioContext: ctx } = get();
+      if (!ctx || ctx.state !== 'running') return;
+
+      const now = ctx.currentTime;
+      let changed = false;
+
+      sources.forEach(source => {
+        // Filter out completed scheduled nodes
+        const initialCount = source.scheduledNodes.length;
+        source.scheduledNodes = source.scheduledNodes.filter(sn => now < sn.stop);
+
+        const isScheduledPlaying = source.scheduledNodes.some(
+          sn => now >= sn.start && now < sn.stop
+        );
+
+        const shouldBePlaying = isScheduledPlaying || source.sourceNode !== null;
+
+        if (source.isPlaying !== shouldBePlaying || source.scheduledNodes.length !== initialCount) {
+          source.isPlaying = shouldBePlaying;
+          source.activeScheduledCount = source.scheduledNodes.length;
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        set({ sources: new Map(sources) });
+      }
+    }, 50);
+
+    set({ audioContext, isInitialized: true, stateSyncInterval });
   },
 
   loadAudioFile: async (element, fileData) => {
@@ -119,6 +152,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         isPlaying: false,
         isLooping: false, // Default to false globally
         activeScheduledCount: 0,
+        scheduledNodes: [],
       };
 
       sources.set(element.id, source);
@@ -238,9 +272,18 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         } catch {
           // Ignore
         }
-        source.sourceNode = null;
-        source.isPlaying = false;
       }
+      source.scheduledNodes.forEach(sn => {
+        try {
+          sn.node.stop();
+        } catch {
+          // Ignore
+        }
+      });
+      source.scheduledNodes = [];
+      source.sourceNode = null;
+      source.isPlaying = false;
+      source.activeScheduledCount = 0;
     });
     set({
       sources: new Map(sources),
@@ -311,14 +354,28 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
           // Ignore
         }
       }
+      source.scheduledNodes.forEach(sn => {
+        try {
+          sn.node.stop();
+        } catch {
+          // Ignore
+        }
+      });
+      source.scheduledNodes = [];
       source.gainNode?.disconnect();
     });
+
+    const { stateSyncInterval } = get();
+    if (stateSyncInterval !== null) {
+      clearInterval(stateSyncInterval);
+    }
 
     audioContext?.close();
     set({
       audioContext: null,
       sources: new Map(),
       isInitialized: false,
+      stateSyncInterval: null,
       activeTimelineLoopTimeout: null,
       isTimelinePlaying: false,
       isTimelinePaused: false,
@@ -409,14 +466,13 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       sourceNode.start(startTime);
       sourceNode.stop(stopTime);
 
-      source.activeScheduledCount += 1;
-      source.isPlaying = true;
+      source.scheduledNodes.push({
+        node: sourceNode,
+        start: startTime,
+        stop: stopTime,
+      });
 
-      sourceNode.onended = () => {
-        source.activeScheduledCount = Math.max(0, source.activeScheduledCount - 1);
-        source.isPlaying = Boolean(source.sourceNode) || source.activeScheduledCount > 0;
-        set({ sources: new Map(sources) });
-      };
+      // isPlaying and activeScheduledCount are now handled by the stateSyncInterval
 
       set({ sources: new Map(sources) });
     } catch (e) {
@@ -457,20 +513,37 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
 
     // Fade out all currently playing
     sources.forEach(source => {
+      // Cancel strictly future nodes to avoid them playing when gain goes back up
+      source.scheduledNodes = source.scheduledNodes.filter(sn => {
+        if (sn.start > now) {
+          try {
+            sn.node.stop();
+          } catch {
+            // ignore
+          }
+          return false;
+        }
+        return true;
+      });
+
       if (source.isPlaying && source.gainNode) {
         source.gainNode.gain.cancelScheduledValues(now);
         source.gainNode.gain.setValueAtTime(source.gainNode.gain.value, now);
         source.gainNode.gain.linearRampToValueAtTime(0, now + fadeOutDuration);
 
         setTimeout(() => {
-          if (source.sourceNode) {
-            try {
-              source.sourceNode.stop();
-            } catch {
-              // ignore
+          const currentSource = get().sources.get(source.element.id);
+          if (currentSource) {
+            if (currentSource.sourceNode) {
+              try {
+                currentSource.sourceNode.stop();
+              } catch {
+                // ignore
+              }
+              currentSource.sourceNode = null;
             }
-            source.isPlaying = false;
-            source.sourceNode = null;
+            // State sync interval handles activeScheduledCount
+            set({ sources: new Map(get().sources) });
           }
         }, fadeOutDuration * 1000);
       }

@@ -172,11 +172,11 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                     />
 
                     <div className="flex-1 relative transition-colors duration-300 pb-20 overflow-y-auto overflow-x-hidden custom-scrollbar">
-                      {isTimelinePlaying && currentPlaybackMs > 0 && (
+                      {showPlayhead && displayPlaybackMs > 0 && (
                         <div
                           className="absolute top-0 bottom-0 w-px bg-cyan-400 z-50 pointer-events-none shadow-[0_0_10px_#22d3ee]"
                           style={{
-                            left: `calc(128px + ${(Math.min(timelineEditorDurationMs, currentPlaybackMs) / timelineEditorDurationMs) * 100}%)`,
+                            left: `calc(128px + ${(Math.min(timelineEditorDurationMs, displayPlaybackMs) / timelineEditorDurationMs) * 100}%)`,
                           }}
                         />
                       )}
@@ -187,7 +187,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                           track={track}
                           timelineElements={timelineElements}
                           audioElements={audioElements}
-                          isTimelinePlaying={isTimelinePlaying}
+                          isTimelinePlaying={showPlayhead}
                           displayPlaybackMs={displayPlaybackMs}
                           timelineEditorDurationMs={timelineEditorDurationMs}
                           timelineEditorDurationSec={timelineEditorDurationSec}
