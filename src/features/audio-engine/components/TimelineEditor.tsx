@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Droppable } from '@hello-pangea/dnd';
 import { AnimatePresence, motion } from 'framer-motion';
 
-import { IconPlay, IconPlus, IconStop, IconTrash } from '../../../shared/components/Icons';
+import {
+  IconPlay,
+  IconPlus,
+  IconStop,
+  IconTrash,
+  IconRepeat,
+} from '../../../shared/components/Icons';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
 import { useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
@@ -48,12 +54,17 @@ interface TimelineEditorProps {
 export function TimelineEditor({ moodId }: TimelineEditorProps) {
   const {
     timelines,
+    tracks,
     elements: timelineElements,
     selectedTimelineId,
     loadTimelines,
     selectTimeline,
     createTimeline,
     deleteTimeline,
+    toggleTimelineLoop,
+    createTimelineTrack,
+    deleteTimelineTrack,
+    updateElementTimeAndDuration,
     deleteTimelineElement,
   } = useTimelineStore();
 
@@ -61,20 +72,18 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
   const { stopAll, crossfadeToTimeline } = useAudioEngineStore();
   const { toast } = useToast();
 
-  const trackRef = useRef<HTMLDivElement>(null);
-
   const [isExpanded, setIsExpanded] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [newTimelineName, setNewTimelineName] = useState('');
 
   // Track mouse X position globally during drag since Pangea doesn't provide clientX on drop
   useEffect(() => {
-    const handleDragOver = (e: DragEvent) => {
-      window.__lastDragX = e.clientX;
-      window.__lastDragY = e.clientY;
+    const handleMouseMove = (e: MouseEvent) => {
+      (window as any).__lastDragX = e.clientX;
+      (window as any).__lastDragY = e.clientY;
     };
-    window.addEventListener('dragover', handleDragOver);
-    return () => window.removeEventListener('dragover', handleDragOver);
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
   useEffect(() => {
@@ -96,7 +105,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
   // since this will be handled by Pangea in AudioUploader
 
   return (
-    <div className="pt-8 border-t border-white/5 bg-black/40 rounded-t-3xl p-6 lg:p-8 mt-4 relative overflow-hidden">
+    <div className="pt-8 border-t border-white/5 bg-black/40 rounded-t-3xl p-6 lg:p-8 mt-4 relative overflow-visible">
       {/* Glow effects for aesthetic */}
       <div className="absolute top-0 right-1/4 w-96 h-96 bg-cyan-500/5 rounded-full blur-[120px] pointer-events-none" />
 
@@ -135,7 +144,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: 'easeInOut' }}
-            className="overflow-hidden"
+            className="overflow-visible"
           >
             <div className="flex flex-col md:flex-row gap-6 h-[340px] relative z-10 mt-6 md:mt-0 pt-2">
               {/* Sidebar: Timeline List */}
@@ -224,7 +233,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
               </div>
 
               {/* Main Track Area */}
-              <div className="flex-1 bg-gradient-to-b from-[#1a1a25] to-black/30 border border-white/5 rounded-xl relative flex flex-col overflow-hidden">
+              <div className="flex-1 bg-gradient-to-b from-[#1a1a25] to-black/30 border border-white/5 rounded-xl relative flex flex-col overflow-visible">
                 {!selectedTimelineId ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
                     <div className="w-16 h-16 rounded-full bg-black/50 border border-white/5 flex items-center justify-center mb-4 relative">
@@ -256,6 +265,23 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                         >
                           <IconStop className="w-5 h-5" />
                         </button>
+                        <button
+                          onClick={() => {
+                            const activeTimeline = timelines.find(t => t.id === selectedTimelineId);
+                            if (activeTimeline) {
+                              toggleTimelineLoop(selectedTimelineId, !activeTimeline.is_looping);
+                            }
+                          }}
+                          className={cn(
+                            'w-10 h-10 rounded-full flex items-center justify-center transition-all border',
+                            timelines.find(t => t.id === selectedTimelineId)?.is_looping
+                              ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-[0_0_15px_rgba(0,212,255,0.2)]'
+                              : 'bg-[#1e1e28] text-gray-400 border-white/5 hover:bg-white/10 hover:text-white'
+                          )}
+                          title="Toggle Loop"
+                        >
+                          <IconRepeat className="w-4 h-4" />
+                        </button>
                       </div>
 
                       {/* Timeline Progress Representation */}
@@ -271,100 +297,176 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                     </div>
 
                     {/* Composition Track Background / Grid */}
-                    <Droppable
-                      droppableId="timeline-track"
-                      direction="horizontal"
-                      isDropDisabled={false}
-                    >
-                      {(provided, snapshot) => (
+                    <div className="flex-1 relative transition-colors duration-300 pb-20 overflow-y-auto overflow-x-hidden custom-scrollbar">
+                      {tracks.map(track => (
                         <div
-                          ref={node => {
-                            trackRef.current = node;
-                            provided.innerRef(node);
-                          }}
-                          {...provided.droppableProps}
-                          className={cn(
-                            'flex-1 relative overflow-auto custom-scrollbar transition-colors duration-300',
-                            snapshot.isDraggingOver
-                              ? 'bg-cyan-500/5 ring-inset ring-2 ring-cyan-500/30'
-                              : ''
-                          )}
+                          key={track.id}
+                          className="relative border-b border-white/5 bg-[#1a1a25]/30"
                         >
-                          {/* Time markers background */}
-                          <div className="absolute inset-0 flex pointer-events-none opacity-20">
-                            {Array.from({ length: 60 }).map((_, i) => (
-                              <div
-                                key={i}
-                                className={cn(
-                                  'flex-1 border-r border-white/10 h-full',
-                                  i % 5 === 4 ? 'border-white/30 bg-white/5' : ''
-                                )}
-                              />
-                            ))}
+                          {/* Track Header (left info) */}
+                          <div className="sticky left-0 top-0 bottom-0 w-32 bg-[#14141d] border-r border-white/10 z-30 flex flex-col justify-center px-4 py-3 shadow-[5px_0_15px_rgba(0,0,0,0.3)]">
+                            <div className="text-[10px] font-bold text-gray-400 truncate w-full uppercase tracking-wider">
+                              {track.name}
+                            </div>
+                            <button
+                              onClick={() => deleteTimelineTrack(track.id)}
+                              className="text-gray-600 hover:text-red-400 mt-2 text-left w-max transition-colors"
+                            >
+                              <IconTrash className="w-3.5 h-3.5" />
+                            </button>
                           </div>
 
-                          {/* Placed Elements Space */}
-                          <div className="absolute inset-0 mt-6 pb-6 px-2">
-                            <AnimatePresence>
-                              {timelineElements.map((te, index) => {
-                                const el = audioElements.find(a => a.id === te.audio_element_id);
-                                if (!el) return null;
-                                const leftPercent = (te.start_time_ms / 60000) * 100;
-
-                                return (
-                                  <motion.div
-                                    key={te.id}
-                                    initial={{ opacity: 0, y: 10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, scale: 0.9 }}
-                                    className="absolute bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border border-cyan-500/30 rounded-lg px-3 py-2 shadow-lg group focus:outline-none flex items-center gap-3 backdrop-blur-md hover:border-cyan-400 transition-colors"
-                                    style={{
-                                      left: `${leftPercent}%`,
-                                      top: `${(index % 4) * 45}px`,
-                                      width: '30%', // Visual representation of length
-                                      minWidth: '150px',
-                                    }}
-                                  >
-                                    <div className="w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0">
-                                      <IconPlay className="w-3 h-3 ml-0.5" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="text-[11px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
-                                        {el.file_name.split('.')[0]}
-                                      </div>
-                                      <div className="text-[9px] text-cyan-500 font-mono tracking-wider">
-                                        {(te.start_time_ms / 1000).toFixed(1)}s
-                                      </div>
-                                    </div>
-                                    <button
-                                      onClick={e => {
-                                        e.stopPropagation();
-                                        deleteTimelineElement(te.id);
-                                      }}
-                                      className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all shrink-0"
-                                    >
-                                      <IconTrash className="w-3.5 h-3.5" />
-                                    </button>
-                                  </motion.div>
-                                );
-                              })}
-                            </AnimatePresence>
-
-                            {timelineElements.length === 0 && (
-                              <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 pointer-events-none group">
-                                <div className="w-16 h-16 rounded-full border-2 border-dashed border-white/10 flex items-center justify-center mb-4 group-hover:border-cyan-500/30 group-hover:bg-cyan-500/5 transition-all">
-                                  <IconPlus className="w-6 h-6 opacity-30 group-hover:opacity-100 group-hover:text-cyan-400" />
+                          {/* Track Content */}
+                          <Droppable
+                            droppableId={`timeline-track-${track.id}`}
+                            direction="horizontal"
+                          >
+                            {(provided, snapshot) => (
+                              <div
+                                id={`timeline-track-container-${track.id}`}
+                                ref={provided.innerRef}
+                                {...provided.droppableProps}
+                                className={cn(
+                                  'absolute left-32 top-0 bottom-0 right-0 h-24 relative transition-colors duration-300 w-full',
+                                  snapshot.isDraggingOver
+                                    ? 'bg-cyan-500/5 ring-inset ring-1 ring-cyan-500/20'
+                                    : ''
+                                )}
+                              >
+                                {/* Time markers background */}
+                                <div className="absolute inset-0 flex pointer-events-none opacity-20">
+                                  {Array.from({ length: 60 }).map((_, i) => (
+                                    <div
+                                      key={i}
+                                      className={cn(
+                                        'flex-1 border-r border-white/10 h-full',
+                                        i % 5 === 4 ? 'border-white/30 bg-white/5' : ''
+                                      )}
+                                    />
+                                  ))}
                                 </div>
-                                <span className="text-sm font-medium tracking-wide">
-                                  Arraste sons da biblioteca para cá
-                                </span>
+
+                                {/* Placed Elements Space */}
+                                <div className="absolute inset-0 pt-2 pb-2 px-0 overflow-y-hidden">
+                                  <AnimatePresence>
+                                    {timelineElements
+                                      .filter(te => Number(te.track_id) === track.id)
+                                      .map((te, _index) => {
+                                        const el = audioElements.find(
+                                          a => a.id === Number(te.audio_element_id)
+                                        );
+                                        if (!el) return null;
+                                        const leftPercent = (te.start_time_ms / 60000) * 100;
+                                        const widthPercent = (te.duration_ms / 60000) * 100;
+
+                                        return (
+                                          <motion.div
+                                            key={te.id}
+                                            id={`clip-card-${te.id}`}
+                                            initial={{ opacity: 0, scale: 0.9 }}
+                                            animate={{ opacity: 1, scale: 1, x: 0 }}
+                                            exit={{ opacity: 0, scale: 0.8 }}
+                                            drag="x"
+                                            dragMomentum={false}
+                                            dragElastic={0}
+                                            onDragEnd={(_e, _info) => {
+                                              const container = document.getElementById(
+                                                `timeline-track-container-${track.id}`
+                                              );
+                                              if (!container) return;
+                                              const trackWidth = container.scrollWidth;
+
+                                              const targetElement = document.getElementById(
+                                                `clip-card-${te.id}`
+                                              );
+                                              if (!targetElement) return;
+
+                                              const elRect = targetElement.getBoundingClientRect();
+                                              const trackRect = container.getBoundingClientRect();
+
+                                              let dropX =
+                                                elRect.left - trackRect.left + container.scrollLeft;
+                                              dropX = Math.max(0, dropX);
+
+                                              const percentage = Math.max(
+                                                0,
+                                                Math.min(100, (dropX / trackWidth) * 100)
+                                              );
+                                              const newStartTimeMs = Math.round(
+                                                (percentage / 100) * 60000
+                                              );
+
+                                              const snappedStartMs =
+                                                Math.round(newStartTimeMs / 100) * 100;
+
+                                              updateElementTimeAndDuration(
+                                                te.id,
+                                                snappedStartMs,
+                                                te.duration_ms
+                                              );
+                                            }}
+                                            className="clip-card absolute h-16 top-4 bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border border-cyan-500/30 rounded-lg px-3 py-2 shadow-lg group focus:outline-none flex items-center gap-3 cursor-grab active:cursor-grabbing backdrop-blur-md hover:border-cyan-400 transition-colors z-10"
+                                            style={{
+                                              left: `${leftPercent}%`,
+                                              width: `${Math.max(widthPercent, 5)}%`,
+                                              minWidth: '60px',
+                                              touchAction: 'none', // Important for framer-motion drag on some devices
+                                            }}
+                                          >
+                                            <div className="w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0 pointer-events-none">
+                                              <IconPlay className="w-3 h-3 ml-0.5" />
+                                            </div>
+                                            <div className="flex-1 min-w-0 pointer-events-none">
+                                              <div className="text-[11px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
+                                                {el.file_name.split('.')[0]}
+                                              </div>
+                                              <div className="text-[9px] text-cyan-500 font-mono tracking-wider">
+                                                {(te.start_time_ms / 1000).toFixed(1)}s
+                                              </div>
+                                            </div>
+                                            <button
+                                              onClick={e => {
+                                                e.stopPropagation();
+                                                deleteTimelineElement(te.id);
+                                              }}
+                                              onPointerDown={e => e.stopPropagation()}
+                                              className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all shrink-0 cursor-pointer"
+                                            >
+                                              <IconTrash className="w-3.5 h-3.5" />
+                                            </button>
+                                          </motion.div>
+                                        );
+                                      })}
+                                  </AnimatePresence>
+
+                                  {provided.placeholder}
+                                </div>
                               </div>
                             )}
-                            {provided.placeholder}
-                          </div>
+                          </Droppable>
+                        </div>
+                      ))}
+
+                      {/* Add Track Button */}
+                      <div className="p-4 border-b border-white/5 bg-black/10 flex">
+                        <button
+                          onClick={() =>
+                            createTimelineTrack(selectedTimelineId!, `Track ${tracks.length + 1}`)
+                          }
+                          className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider text-gray-400 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-colors border border-dashed border-white/10 hover:border-cyan-500/30 ml-32"
+                        >
+                          <IconPlus className="w-3 h-3" /> Add Track
+                        </button>
+                      </div>
+
+                      {tracks.length === 0 && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 pointer-events-none">
+                          <span className="text-sm tracking-wide">
+                            Adicione uma Track para começar
+                          </span>
                         </div>
                       )}
-                    </Droppable>
+                    </div>
                   </div>
                 )}
               </div>

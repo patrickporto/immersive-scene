@@ -40,15 +40,26 @@ pub struct Timeline {
     pub mood_id: i64,
     pub name: String,
     pub order_index: i64,
+    pub is_looping: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TimelineTrack {
+    pub id: i64,
+    pub timeline_id: i64,
+    pub name: String,
+    pub order_index: i64,
     pub created_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TimelineElement {
     pub id: i64,
-    pub timeline_id: i64,
+    pub track_id: i64,
     pub audio_element_id: i64,
     pub start_time_ms: i64,
+    pub duration_ms: i64,
 }
 
 fn get_db_path(app_handle: &AppHandle) -> PathBuf {
@@ -100,6 +111,7 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             mood_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             order_index INTEGER DEFAULT 0,
+            is_looping INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (mood_id) REFERENCES moods(id) ON DELETE CASCADE
         )",
@@ -107,12 +119,27 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
     )?;
 
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS timeline_elements (
+        "CREATE TABLE IF NOT EXISTS timeline_tracks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timeline_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            order_index INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS timeline_elements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timeline_id INTEGER,
+            track_id INTEGER,
             audio_element_id INTEGER NOT NULL,
             start_time_ms INTEGER DEFAULT 0,
+            duration_ms INTEGER DEFAULT 0,
             FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE,
+            FOREIGN KEY (track_id) REFERENCES timeline_tracks(id) ON DELETE CASCADE,
             FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE
         )",
         [],
@@ -141,6 +168,45 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             [],
         )?;
         conn.execute("UPDATE audio_elements SET sound_set_id = (SELECT sound_set_id FROM moods WHERE moods.id = audio_elements.mood_id)", [])?;
+    }
+
+    // Timelines migration for is_looping
+    let mut stmt = conn.prepare("PRAGMA table_info(timelines)")?;
+    let has_is_looping = stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "is_looping")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if !has_is_looping {
+        conn.execute(
+            "ALTER TABLE timelines ADD COLUMN is_looping INTEGER DEFAULT 0",
+            [],
+        )?;
+    }
+
+    // Timeline elements migration for tracks and duration
+    let mut stmt = conn.prepare("PRAGMA table_info(timeline_elements)")?;
+    let has_track_id = stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "track_id")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if !has_track_id {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN track_id INTEGER",
+            [],
+        )?;
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN duration_ms INTEGER DEFAULT 0",
+            [],
+        )?;
+
+        conn.execute("INSERT INTO timeline_tracks (timeline_id, name, order_index) SELECT id, 'Master Track', 0 FROM timelines", [])?;
+        conn.execute("UPDATE timeline_elements SET track_id = (SELECT id FROM timeline_tracks WHERE timeline_tracks.timeline_id = timeline_elements.timeline_id)", [])?;
     }
 
     Ok(())
@@ -366,7 +432,7 @@ async fn create_timeline(
         .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO timelines (mood_id, name, order_index) VALUES (?1, ?2, ?3)",
+        "INSERT INTO timelines (mood_id, name, order_index, is_looping) VALUES (?1, ?2, ?3, 0)",
         [&mood_id.to_string(), &name, &order_index.to_string()],
     )
     .map_err(|e| e.to_string())?;
@@ -378,6 +444,7 @@ async fn create_timeline(
         mood_id,
         name,
         order_index,
+        is_looping: false,
         created_at: chrono::Local::now().to_rfc3339(),
     })
 }
@@ -388,7 +455,7 @@ async fn get_timelines(app_handle: AppHandle, mood_id: i64) -> Result<Vec<Timeli
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, mood_id, name, order_index, created_at FROM timelines WHERE mood_id = ?1 ORDER BY order_index ASC"
+        "SELECT id, mood_id, name, order_index, is_looping, created_at FROM timelines WHERE mood_id = ?1 ORDER BY order_index ASC"
     ).map_err(|e| e.to_string())?;
 
     let timelines = stmt
@@ -398,7 +465,8 @@ async fn get_timelines(app_handle: AppHandle, mood_id: i64) -> Result<Vec<Timeli
                 mood_id: row.get(1)?,
                 name: row.get(2)?,
                 order_index: row.get(3)?,
-                created_at: row.get(4)?,
+                is_looping: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -419,49 +487,177 @@ async fn delete_timeline(app_handle: AppHandle, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn add_element_to_timeline(
+async fn update_timeline_loop(
+    app_handle: AppHandle,
+    id: i64,
+    is_looping: bool,
+) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let loop_int = if is_looping { 1 } else { 0 };
+    conn.execute(
+        "UPDATE timelines SET is_looping = ?1 WHERE id = ?2",
+        [&loop_int.to_string(), &id.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn create_timeline_track(
     app_handle: AppHandle,
     timeline_id: i64,
-    audio_element_id: i64,
-    start_time_ms: i64,
-) -> Result<TimelineElement, String> {
+    name: String,
+) -> Result<TimelineTrack, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM timeline_tracks WHERE timeline_id = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let order_index: i64 = stmt
+        .query_row([&timeline_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO timeline_tracks (timeline_id, name, order_index) VALUES (?1, ?2, ?3)",
+        [&timeline_id.to_string(), &name, &order_index.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(TimelineTrack {
+        id,
+        timeline_id,
+        name,
+        order_index,
+        created_at: chrono::Local::now().to_rfc3339(),
+    })
+}
+
+#[tauri::command]
+async fn get_timeline_tracks(
+    app_handle: AppHandle,
+    timeline_id: i64,
+) -> Result<Vec<TimelineTrack>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, timeline_id, name, order_index, created_at FROM timeline_tracks WHERE timeline_id = ?1 ORDER BY order_index ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let tracks = stmt
+        .query_map([timeline_id], |row| {
+            Ok(TimelineTrack {
+                id: row.get(0)?,
+                timeline_id: row.get(1)?,
+                name: row.get(2)?,
+                order_index: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<Vec<_>, _> = tracks.collect();
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_timeline_track(app_handle: AppHandle, id: i64) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute("DELETE FROM timeline_tracks WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_timeline_track_order(
+    app_handle: AppHandle,
+    id: i64,
+    order_index: i64,
+) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO timeline_elements (timeline_id, audio_element_id, start_time_ms) VALUES (?1, ?2, ?3)",
-        [&timeline_id.to_string(), &audio_element_id.to_string(), &start_time_ms.to_string()],
+        "UPDATE timeline_tracks SET order_index = ?1 WHERE id = ?2",
+        [&order_index.to_string(), &id.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn add_element_to_track(
+    app_handle: AppHandle,
+    track_id: i64,
+    audio_element_id: i64,
+    start_time_ms: i64,
+    duration_ms: i64,
+) -> Result<TimelineElement, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let timeline_id: i64 = conn
+        .query_row(
+            "SELECT timeline_id FROM timeline_tracks WHERE id = ?1",
+            [track_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO timeline_elements (timeline_id, track_id, audio_element_id, start_time_ms, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+        [
+            &timeline_id.to_string(),
+            &track_id.to_string(),
+            &audio_element_id.to_string(),
+            &start_time_ms.to_string(),
+            &duration_ms.to_string(),
+        ],
     ).map_err(|e| e.to_string())?;
 
     let id = conn.last_insert_rowid();
 
     Ok(TimelineElement {
         id,
-        timeline_id,
+        track_id,
         audio_element_id,
         start_time_ms,
+        duration_ms,
     })
 }
 
 #[tauri::command]
-async fn get_timeline_elements(
+async fn get_track_elements(
     app_handle: AppHandle,
-    timeline_id: i64,
+    track_id: i64,
 ) -> Result<Vec<TimelineElement>, String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, timeline_id, audio_element_id, start_time_ms FROM timeline_elements WHERE timeline_id = ?1 ORDER BY start_time_ms ASC"
+        "SELECT id, track_id, audio_element_id, start_time_ms, duration_ms FROM timeline_elements WHERE track_id = ?1 ORDER BY start_time_ms ASC"
     ).map_err(|e| e.to_string())?;
 
     let elements = stmt
-        .query_map([timeline_id], |row| {
+        .query_map([track_id], |row| {
             Ok(TimelineElement {
                 id: row.get(0)?,
-                timeline_id: row.get(1)?,
+                track_id: row.get(1)?,
                 audio_element_id: row.get(2)?,
                 start_time_ms: row.get(3)?,
+                duration_ms: row.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -471,17 +667,22 @@ async fn get_timeline_elements(
 }
 
 #[tauri::command]
-async fn update_timeline_element_time(
+async fn update_element_time_and_duration(
     app_handle: AppHandle,
     id: i64,
     start_time_ms: i64,
+    duration_ms: i64,
 ) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute(
-        "UPDATE timeline_elements SET start_time_ms = ?1 WHERE id = ?2",
-        [&start_time_ms.to_string(), &id.to_string()],
+        "UPDATE timeline_elements SET start_time_ms = ?1, duration_ms = ?2 WHERE id = ?3",
+        [
+            &start_time_ms.to_string(),
+            &duration_ms.to_string(),
+            &id.to_string(),
+        ],
     )
     .map_err(|e| e.to_string())?;
 
@@ -528,9 +729,14 @@ pub fn run() {
             create_timeline,
             get_timelines,
             delete_timeline,
-            add_element_to_timeline,
-            get_timeline_elements,
-            update_timeline_element_time,
+            update_timeline_loop,
+            create_timeline_track,
+            get_timeline_tracks,
+            delete_timeline_track,
+            update_timeline_track_order,
+            add_element_to_track,
+            get_track_elements,
+            update_element_time_and_duration,
             delete_timeline_element,
         ])
         .setup(|app| {

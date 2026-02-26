@@ -112,7 +112,10 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
   const handleDragEnd = (result: DropResult) => {
     const { destination, draggableId } = result;
 
-    if (!destination) return;
+    if (!destination) {
+      error(`Drop failed: no destination (dragged ${draggableId})`);
+      return;
+    }
 
     const elementId = parseInt(draggableId, 10);
     if (isNaN(elementId)) return;
@@ -122,45 +125,61 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
       return;
     }
 
-    if (destination.droppableId === 'timeline-track') {
-      const { selectedTimelineId, addElementToTimeline } = useTimelineStore.getState();
+    const timelineTrackMatch = destination.droppableId.match(/^timeline-track-(\d+)$/);
+    if (timelineTrackMatch) {
+      const { selectedTimelineId, addElementToTrack } = useTimelineStore.getState();
       if (!selectedTimelineId) {
         error('Selecione uma timeline primeiro.');
         return;
       }
 
-      // Calculate the start time based on the dropped X coordinate
-      // We assume timeline width represents 60 seconds (60000ms), but the track is scrollable
-      // The simplest calculation is using a static width for now, or finding the track element
-      const trackElement = document.getElementById('timeline-track-container');
+      const targetTrackId = Number(timelineTrackMatch[1]);
+      const targetTrackElement = document.getElementById(
+        `timeline-track-container-${targetTrackId}`
+      );
+
+      if (!targetTrackElement) {
+        error('Elemento não solto sobre uma trilha válida.');
+        return;
+      }
+
+      const dropX = (window as any).__lastDragX;
       let startTimeMs = 0;
 
-      if (trackElement && window.__lastDragX !== undefined) {
-        const rect = trackElement.getBoundingClientRect();
-        // The track has a padding or offset? Let's use exact clientX
-        const dropX = window.__lastDragX - rect.left + trackElement.scrollLeft;
-
-        // Let's assume the track uses tailwind `w-full` but represents something.
-        // Looking at TimelineEditor, 1 minute is the baseline width, or is it wider?
-        // Actually, the track background uses `percent` in mapping: (start_time_ms / 60000) * 100
-        // So 60,000ms = 100% of the track element's scrollWidth
-        const trackWidth = trackElement.scrollWidth;
-        const percentage = Math.max(0, Math.min(100, (dropX / trackWidth) * 100));
-
+      if (typeof dropX === 'number') {
+        const rect = targetTrackElement.getBoundingClientRect();
+        const relativeX = dropX - rect.left + targetTrackElement.scrollLeft;
+        const trackWidth = Math.max(targetTrackElement.scrollWidth, targetTrackElement.clientWidth);
+        const percentage = Math.max(0, Math.min(100, (relativeX / trackWidth) * 100));
         startTimeMs = Math.round((percentage / 100) * 60000);
       }
 
-      addElementToTimeline(selectedTimelineId, elementId, startTimeMs).catch(err => {
-        error('Falha ao adicionar elemento à timeline: ' + err.message);
-      });
+      // Estimate duration from loaded audio buffer
+      const audioSource = useAudioEngineStore.getState().sources.get(elementId);
+      const durationMs = audioSource?.buffer
+        ? Math.round(audioSource.buffer.duration * 1000)
+        : 10000;
+
+      addElementToTrack(targetTrackId, elementId, startTimeMs, durationMs)
+        .then(() => {
+          success(
+            `Elemento ${elementId} na trilha ${targetTrackId} (${startTimeMs}ms - duração ${durationMs}ms)`
+          );
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          error('Falha ao adicionar elemento à timeline: ' + message);
+        });
+    } else {
+      error(`Destino de drop inválido: ${destination.droppableId}`);
     }
   };
 
   return (
     <DragDropContext onDragEnd={handleDragEnd}>
-      <div className="flex flex-col h-full space-y-6 p-8 max-w-[1600px] mx-auto w-full overflow-hidden">
+      <div className="flex flex-col h-full space-y-6 p-8 max-w-[1600px] mx-auto w-full">
         {/* Elements Grid - Main Mixing Board */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar">
           <div className="flex items-center justify-between mb-6 px-4">
             <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">
               Mixing Elements ({audioElements.length})

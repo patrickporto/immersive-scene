@@ -11,8 +11,14 @@ import { useTimelineStore } from '../../sound-sets/stores/timelineStore';
 
 export function BottomPlayer() {
   const { selectedSoundSet, selectedMood } = useSoundSetStore();
-  const { selectedTimelineId, timelines } = useTimelineStore();
-  const { sources, stopAll, globalVolume, setGlobalVolume } = useAudioEngineStore();
+  const {
+    selectedTimelineId,
+    timelines,
+    elements: timelineElements,
+    toggleTimelineLoop,
+  } = useTimelineStore();
+  const { sources, stopAll, crossfadeToTimeline, globalVolume, setGlobalVolume } =
+    useAudioEngineStore();
 
   const [isMasterMuted, setIsMasterMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(1);
@@ -20,6 +26,15 @@ export function BottomPlayer() {
   // Derive playing status
   const playingCount = Array.from(sources.values()).filter(s => s.isPlaying).length;
   const isPlaying = playingCount > 0;
+  const activeTimeline = timelines.find(t => t.id === selectedTimelineId);
+
+  const handleTogglePlay = () => {
+    if (isPlaying) {
+      stopAll();
+    } else if (selectedTimelineId && timelineElements.length > 0) {
+      crossfadeToTimeline(timelineElements, activeTimeline?.is_looping);
+    }
+  };
 
   const handleToggleMute = () => {
     if (isMasterMuted) {
@@ -76,12 +91,39 @@ export function BottomPlayer() {
           </Cluster>
 
           {/* Master Controls */}
-          <Cluster gap={2} align="center" justify="center" className="flex-shrink-0">
+          <Cluster gap={2} align="center" justify="center" className="flex-shrink-0 relative">
             <MasterControls
               isPlaying={isPlaying}
-              onTogglePlay={() => {}} /* Not strictly needed if elements manage own play state, but could implement a global pause */
+              onTogglePlay={handleTogglePlay}
               onStopAll={stopAll}
             />
+            {selectedTimelineId && (
+              <button
+                onClick={() => toggleTimelineLoop(selectedTimelineId, !activeTimeline?.is_looping)}
+                className={`absolute -right-12 p-2 rounded-full transition-colors ${
+                  activeTimeline?.is_looping
+                    ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20'
+                    : 'text-gray-500 hover:text-white hover:bg-white/5'
+                }`}
+                title="Loop Timeline"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="w-5 h-5"
+                >
+                  <path d="M17 2l4 4-4 4" />
+                  <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+                  <path d="M7 22l-4-4 4-4" />
+                  <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+                </svg>
+              </button>
+            )}
           </Cluster>
 
           {/* Master Volume */}

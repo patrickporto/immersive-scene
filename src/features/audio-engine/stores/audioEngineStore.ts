@@ -37,11 +37,18 @@ interface AudioEngineState {
   setGlobalVolume: (volume: number) => void;
   setSelectedElementId: (id: number | null) => void;
   removeSource: (elementId: number) => void;
+  activeTimelineLoopTimeout: number | null;
   cleanup: () => void;
   crossfadeToTimeline: (
-    timelineElements: { audio_element_id: number; start_time_ms: number }[]
+    timelineElements: { audio_element_id: number; start_time_ms: number; duration_ms: number }[],
+    isLooping?: boolean
   ) => void;
-  playScheduled: (elementId: number, delayMs: number, fadeInDuration?: number) => Promise<void>;
+  playScheduled: (
+    elementId: number,
+    delayMs: number,
+    playDurationMs: number,
+    fadeInDuration?: number
+  ) => Promise<void>;
 }
 
 export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
@@ -50,6 +57,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   isInitialized: false,
   globalVolume: 1.0,
   selectedElementId: null,
+  activeTimelineLoopTimeout: null,
 
   setSelectedElementId: id => set({ selectedElementId: id }),
 
@@ -188,7 +196,12 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   stopAll: () => {
-    const { sources } = get();
+    const { sources, activeTimelineLoopTimeout } = get();
+    if (activeTimelineLoopTimeout !== null) {
+      clearTimeout(activeTimelineLoopTimeout);
+      set({ activeTimelineLoopTimeout: null });
+    }
+
     sources.forEach(source => {
       if (source.sourceNode) {
         try {
@@ -248,7 +261,11 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   cleanup: () => {
-    const { audioContext, sources } = get();
+    const { audioContext, sources, activeTimelineLoopTimeout } = get();
+
+    if (activeTimelineLoopTimeout !== null) {
+      clearTimeout(activeTimelineLoopTimeout);
+    }
 
     sources.forEach(source => {
       if (source.sourceNode) {
@@ -262,10 +279,15 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     });
 
     audioContext?.close();
-    set({ audioContext: null, sources: new Map(), isInitialized: false });
+    set({
+      audioContext: null,
+      sources: new Map(),
+      isInitialized: false,
+      activeTimelineLoopTimeout: null,
+    });
   },
 
-  playScheduled: async (elementId, delayMs, fadeInDuration = 0) => {
+  playScheduled: async (elementId, delayMs, playDurationMs, fadeInDuration = 0) => {
     const { audioContext, sources } = get();
     if (!audioContext || audioContext.state === 'suspended') return;
 
@@ -287,6 +309,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       sourceNode.connect(source.gainNode);
 
       const startTime = audioContext.currentTime + delayMs / 1000;
+      const stopTime = startTime + playDurationMs / 1000;
 
       if (fadeInDuration > 0) {
         source.gainNode.gain.setValueAtTime(0, startTime);
@@ -295,7 +318,10 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         source.gainNode.gain.value = 1;
       }
 
+      // Schedule start and precise stop
       sourceNode.start(startTime);
+      sourceNode.stop(stopTime);
+
       source.sourceNode = sourceNode;
       source.isPlaying = true;
 
@@ -313,9 +339,14 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     }
   },
 
-  crossfadeToTimeline: timelineElements => {
-    const { audioContext, sources, playScheduled } = get();
+  crossfadeToTimeline: (timelineElements, isLooping = false) => {
+    const { audioContext, sources, playScheduled, activeTimelineLoopTimeout } = get();
     if (!audioContext) return;
+
+    if (activeTimelineLoopTimeout !== null) {
+      clearTimeout(activeTimelineLoopTimeout);
+      set({ activeTimelineLoopTimeout: null });
+    }
 
     const now = audioContext.currentTime;
     const fadeOutDuration = 2.0; // 2 seconds crossfade
@@ -341,13 +372,27 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       }
     });
 
-    // Schedule new timeline elements with fade in if they start at 0
-    setTimeout(() => {
+    const scheduleTimelineChunk = () => {
+      let maxEndMs = 0;
+
       timelineElements.forEach(te => {
+        const endMs = te.start_time_ms + te.duration_ms;
+        if (endMs > maxEndMs) maxEndMs = endMs;
+
         // if element starts within the crossfade window, fade it in
         const fadeIn = te.start_time_ms < fadeOutDuration * 1000 ? fadeOutDuration : 0;
-        playScheduled(te.audio_element_id, te.start_time_ms, fadeIn);
+        playScheduled(te.audio_element_id, te.start_time_ms, te.duration_ms, fadeIn).catch(
+          console.error
+        );
       });
-    }, 100); // slight delay to let audio buffer catch up
+
+      if (isLooping && maxEndMs > 0) {
+        const timeoutId = setTimeout(scheduleTimelineChunk, maxEndMs);
+        set({ activeTimelineLoopTimeout: timeoutId as unknown as number });
+      }
+    };
+
+    // Schedule new timeline elements with fade in if they start at 0
+    setTimeout(scheduleTimelineChunk, 100); // slight delay to let audio buffer catch up
   },
 }));
