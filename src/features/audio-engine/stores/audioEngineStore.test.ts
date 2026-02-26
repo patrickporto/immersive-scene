@@ -12,7 +12,12 @@ describe('audioEngineStore scheduling', () => {
       audioContext: { currentTime: 0, state: 'running' } as unknown as AudioContext,
       sources: new Map(),
       activeTimelineLoopTimeout: null,
-      playScheduled: playScheduledMock,
+      playScheduled: playScheduledMock as unknown as (
+        elementId: number,
+        delayMs: number,
+        playDurationMs: number,
+        fadeInDuration?: number
+      ) => Promise<void>,
     });
   });
 

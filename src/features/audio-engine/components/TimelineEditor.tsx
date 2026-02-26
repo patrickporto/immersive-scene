@@ -9,6 +9,7 @@ import {
   IconStop,
   IconTrash,
   IconRepeat,
+  IconPause,
 } from '../../../shared/components/Icons';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
@@ -69,12 +70,50 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
   } = useTimelineStore();
 
   const { audioElements } = useSoundSetStore();
-  const { stopAll, crossfadeToTimeline } = useAudioEngineStore();
+  const {
+    stopAll,
+    crossfadeToTimeline,
+    audioContext,
+    isTimelinePlaying,
+    isTimelinePaused,
+    timelineStartTimeContext,
+    pauseTimeline,
+    resumeTimeline,
+  } = useAudioEngineStore();
   const { toast } = useToast();
 
   const [isExpanded, setIsExpanded] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [newTimelineName, setNewTimelineName] = useState('');
+  const [currentPlaybackMs, setCurrentPlaybackMs] = useState(0);
+
+  // requestAnimationFrame for playback progress
+  useEffect(() => {
+    let animationFrameId: number;
+
+    const updatePlayhead = () => {
+      if (
+        isTimelinePlaying &&
+        !isTimelinePaused &&
+        audioContext &&
+        timelineStartTimeContext !== null
+      ) {
+        const elapsed = (audioContext.currentTime - timelineStartTimeContext) * 1000;
+        setCurrentPlaybackMs(elapsed);
+        animationFrameId = requestAnimationFrame(updatePlayhead);
+      }
+    };
+
+    if (isTimelinePlaying && !isTimelinePaused) {
+      animationFrameId = requestAnimationFrame(updatePlayhead);
+    }
+
+    return () => {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    };
+  }, [isTimelinePlaying, isTimelinePaused, audioContext, timelineStartTimeContext]);
+
+  const displayPlaybackMs = isTimelinePlaying || isTimelinePaused ? currentPlaybackMs : 0;
 
   // Track mouse X position globally during drag since Pangea doesn't provide clientX on drop
   useEffect(() => {
@@ -249,68 +288,126 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                 ) : (
                   <div className="flex-1 flex flex-col">
                     {/* Timeline Header area */}
-                    <div className="bg-black/40 px-6 py-4 flex items-center gap-6 border-b border-white/5 shadow-inner">
-                      <div className="flex items-center gap-3">
-                        <button
-                          onClick={() => crossfadeToTimeline(timelineElements)}
-                          className="w-10 h-10 rounded-full bg-cyan-500 text-black flex items-center justify-center hover:scale-105 transition-all shadow-[0_0_15px_rgba(0,212,255,0.3)] hover:shadow-[0_0_20px_rgba(0,212,255,0.5)]"
-                          title="Play Timeline"
-                        >
-                          <IconPlay className="w-5 h-5 ml-0.5" />
-                        </button>
-                        <button
-                          onClick={() => stopAll()}
-                          className="w-10 h-10 rounded-full bg-[#1e1e28] text-gray-400 flex items-center justify-center hover:bg-white/10 hover:text-white transition-colors border border-white/5"
-                          title="Stop Timeline"
-                        >
-                          <IconStop className="w-5 h-5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            const activeTimeline = timelines.find(t => t.id === selectedTimelineId);
-                            if (activeTimeline) {
-                              toggleTimelineLoop(selectedTimelineId, !activeTimeline.is_looping);
-                            }
-                          }}
-                          className={cn(
-                            'w-10 h-10 rounded-full flex items-center justify-center transition-all border',
-                            timelines.find(t => t.id === selectedTimelineId)?.is_looping
-                              ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-[0_0_15px_rgba(0,212,255,0.2)]'
-                              : 'bg-[#1e1e28] text-gray-400 border-white/5 hover:bg-white/10 hover:text-white'
+                    <div className="bg-black/40 flex flex-col border-b border-white/5 shadow-inner">
+                      {/* Transport Controls */}
+                      <div className="px-6 py-4 flex items-center gap-6 border-b border-white/5">
+                        <div className="flex items-center gap-3">
+                          {isTimelinePlaying && !isTimelinePaused ? (
+                            <button
+                              onClick={() => pauseTimeline()}
+                              className="w-10 h-10 rounded-full bg-yellow-500/20 text-yellow-500 border-yellow-500/30 flex items-center justify-center hover:scale-105 transition-all shadow-[0_0_15px_rgba(234,179,8,0.2)] border"
+                              title="Pause Timeline"
+                            >
+                              <IconPause className="w-5 h-5 ml-0.5" />
+                            </button>
+                          ) : isTimelinePaused ? (
+                            <button
+                              onClick={() => resumeTimeline()}
+                              className="w-10 h-10 rounded-full bg-cyan-500 text-black flex items-center justify-center hover:scale-105 transition-all shadow-[0_0_15px_rgba(0,212,255,0.3)] hover:shadow-[0_0_20px_rgba(0,212,255,0.5)]"
+                              title="Resume Timeline"
+                            >
+                              <IconPlay className="w-5 h-5 ml-0.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => crossfadeToTimeline(timelineElements)}
+                              className="w-10 h-10 rounded-full bg-cyan-500 text-black flex items-center justify-center hover:scale-105 transition-all shadow-[0_0_15px_rgba(0,212,255,0.3)] hover:shadow-[0_0_20px_rgba(0,212,255,0.5)]"
+                              title="Play Timeline"
+                            >
+                              <IconPlay className="w-5 h-5 ml-0.5" />
+                            </button>
                           )}
-                          title="Toggle Loop"
-                        >
-                          <IconRepeat className="w-4 h-4" />
-                        </button>
+                          <button
+                            onClick={() => stopAll()}
+                            className="w-10 h-10 rounded-full bg-[#1e1e28] text-gray-400 flex items-center justify-center hover:bg-white/10 hover:text-white transition-colors border border-white/5"
+                            title="Stop Timeline"
+                          >
+                            <IconStop className="w-5 h-5" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              const activeTimeline = timelines.find(
+                                t => t.id === selectedTimelineId
+                              );
+                              if (activeTimeline) {
+                                toggleTimelineLoop(selectedTimelineId, !activeTimeline.is_looping);
+                              }
+                            }}
+                            className={cn(
+                              'w-10 h-10 rounded-full flex items-center justify-center transition-all border',
+                              timelines.find(t => t.id === selectedTimelineId)?.is_looping
+                                ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-[0_0_15px_rgba(0,212,255,0.2)]'
+                                : 'bg-[#1e1e28] text-gray-400 border-white/5 hover:bg-white/10 hover:text-white'
+                            )}
+                            title="Toggle Loop"
+                          >
+                            <IconRepeat className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Timeline Progress Representation */}
-                      <div className="flex-1 flex flex-col gap-1.5">
-                        <div className="flex justify-between text-[9px] text-cyan-400 font-mono font-bold tracking-widest px-1">
-                          <span>0:00</span>
-                          <span>1:00</span>
-                        </div>
-                        <div className="h-1.5 w-full bg-black/60 rounded-full overflow-hidden border border-white/5 relative">
-                          <div className="absolute top-0 left-0 bottom-0 w-0 bg-cyan-500/50 shadow-[0_0_10px_#22d3ee] rounded-full" />
+                      {/* Timeline Ruler */}
+                      <div className="flex w-full h-10 relative">
+                        {/* 128px spacer to match Track sidebars */}
+                        <div className="w-32 shrink-0 border-r border-white/10 bg-[#14141d]/50" />
+
+                        <div className="flex-1 relative">
+                          <div className="absolute inset-x-0 top-0 bottom-2">
+                            {Array.from({ length: 13 }).map((_, i) => {
+                              const seconds = i * 5;
+                              const leftPercent = (seconds / 60) * 100;
+                              if (seconds > 60) return null;
+                              return (
+                                <div
+                                  key={i}
+                                  className="absolute top-0 flex flex-col items-center h-full"
+                                  style={{ left: `${leftPercent}%`, transform: 'translateX(-50%)' }}
+                                >
+                                  <span className="text-[9px] text-gray-500 font-mono mt-1 opacity-70">
+                                    {seconds}s
+                                  </span>
+                                  <div className="w-px h-1.5 bg-white/20 mt-auto" />
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/60 border-t border-white/5">
+                            <div
+                              className="absolute top-0 left-0 bottom-0 bg-cyan-500/50 shadow-[0_0_10px_#22d3ee] transition-none"
+                              style={{
+                                width: `${Math.min(100, (displayPlaybackMs / 60000) * 100)}%`,
+                              }}
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Composition Track Background / Grid */}
                     <div className="flex-1 relative transition-colors duration-300 pb-20 overflow-y-auto overflow-x-hidden custom-scrollbar">
+                      {/* Global Playhead Line */}
+                      {isTimelinePlaying && currentPlaybackMs > 0 && (
+                        <div
+                          className="absolute top-0 bottom-0 w-px bg-cyan-400 z-50 pointer-events-none shadow-[0_0_10px_#22d3ee]"
+                          style={{
+                            left: `calc(128px + ${(Math.min(60000, currentPlaybackMs) / 60000) * 100}%)`,
+                          }}
+                        />
+                      )}
                       {tracks.map(track => (
                         <div
                           key={track.id}
-                          className="relative border-b border-white/5 bg-[#1a1a25]/30"
+                          className="flex h-24 relative border-b border-white/5 bg-[#1a1a25]/30 group/track"
                         >
                           {/* Track Header (left info) */}
-                          <div className="sticky left-0 top-0 bottom-0 w-32 bg-[#14141d] border-r border-white/10 z-30 flex flex-col justify-center px-4 py-3 shadow-[5px_0_15px_rgba(0,0,0,0.3)]">
+                          <div className="sticky left-0 top-0 bottom-0 w-32 shrink-0 bg-[#14141d] border-r border-white/10 z-30 flex flex-col justify-center px-4 py-3 shadow-[5px_0_15px_rgba(0,0,0,0.3)]">
                             <div className="text-[10px] font-bold text-gray-400 truncate w-full uppercase tracking-wider">
                               {track.name}
                             </div>
                             <button
                               onClick={() => deleteTimelineTrack(track.id)}
-                              className="text-gray-600 hover:text-red-400 mt-2 text-left w-max transition-colors"
+                              className="text-gray-600 opacity-0 group-hover/track:opacity-100 hover:text-red-400 mt-2 text-left w-max transition-all"
                             >
                               <IconTrash className="w-3.5 h-3.5" />
                             </button>
@@ -327,20 +424,22 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                                 ref={provided.innerRef}
                                 {...provided.droppableProps}
                                 className={cn(
-                                  'absolute left-32 top-0 bottom-0 right-0 h-24 relative transition-colors duration-300 w-full',
+                                  'flex-1 relative h-full min-w-0 transition-colors duration-300',
                                   snapshot.isDraggingOver
                                     ? 'bg-cyan-500/5 ring-inset ring-1 ring-cyan-500/20'
                                     : ''
                                 )}
                               >
-                                {/* Time markers background */}
+                                {/* Time markers vertical lines background */}
                                 <div className="absolute inset-0 flex pointer-events-none opacity-20">
                                   {Array.from({ length: 60 }).map((_, i) => (
                                     <div
                                       key={i}
                                       className={cn(
-                                        'flex-1 border-r border-white/10 h-full',
-                                        i % 5 === 4 ? 'border-white/30 bg-white/5' : ''
+                                        'flex-1 border-r h-full',
+                                        i % 5 === 4
+                                          ? 'border-white/20 bg-white/[0.02]'
+                                          : 'border-white/5'
                                       )}
                                     />
                                   ))}
@@ -405,22 +504,21 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                                                 te.duration_ms
                                               );
                                             }}
-                                            className="clip-card absolute h-16 top-4 bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border border-cyan-500/30 rounded-lg px-3 py-2 shadow-lg group focus:outline-none flex items-center gap-3 cursor-grab active:cursor-grabbing backdrop-blur-md hover:border-cyan-400 transition-colors z-10"
+                                            className="clip-card absolute h-16 top-4 bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border border-cyan-500/30 rounded-lg overflow-hidden shadow-lg group focus:outline-none flex items-center gap-1.5 cursor-grab active:cursor-grabbing backdrop-blur-md hover:border-cyan-400 transition-colors z-10"
                                             style={{
                                               left: `${leftPercent}%`,
-                                              width: `${Math.max(widthPercent, 5)}%`,
-                                              minWidth: '60px',
+                                              width: `${Math.max(widthPercent, 0.5)}%`,
                                               touchAction: 'none', // Important for framer-motion drag on some devices
                                             }}
                                           >
-                                            <div className="w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center text-cyan-400 shrink-0 pointer-events-none">
-                                              <IconPlay className="w-3 h-3 ml-0.5" />
+                                            <div className="w-5 h-5 ml-1 rounded-full bg-cyan-500/20 flex flex-col items-center justify-center text-cyan-400 shrink-0 pointer-events-none">
+                                              <IconPlay className="w-2.5 h-2.5 ml-0.5" />
                                             </div>
                                             <div className="flex-1 min-w-0 pointer-events-none">
-                                              <div className="text-[11px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
+                                              <div className="text-[10px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
                                                 {el.file_name.split('.')[0]}
                                               </div>
-                                              <div className="text-[9px] text-cyan-500 font-mono tracking-wider">
+                                              <div className="text-[8px] text-cyan-500 font-mono tracking-wider truncate">
                                                 {(te.start_time_ms / 1000).toFixed(1)}s
                                               </div>
                                             </div>
@@ -430,7 +528,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                                                 deleteTimelineElement(te.id);
                                               }}
                                               onPointerDown={e => e.stopPropagation()}
-                                              className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all shrink-0 cursor-pointer"
+                                              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 text-gray-500 hover:text-red-400 rounded transition-all shrink-0 cursor-pointer mr-1"
                                             >
                                               <IconTrash className="w-3.5 h-3.5" />
                                             </button>

@@ -38,7 +38,14 @@ interface AudioEngineState {
   setSelectedElementId: (id: number | null) => void;
   removeSource: (elementId: number) => void;
   activeTimelineLoopTimeout: number | null;
+  isTimelinePlaying: boolean;
+  isTimelinePaused: boolean;
+  timelineStartTimeContext: number | null;
+  timelineDurationMs: number;
+
   cleanup: () => void;
+  pauseTimeline: () => Promise<void>;
+  resumeTimeline: () => Promise<void>;
   crossfadeToTimeline: (
     timelineElements: { audio_element_id: number; start_time_ms: number; duration_ms: number }[],
     isLooping?: boolean
@@ -58,6 +65,10 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   globalVolume: 1.0,
   selectedElementId: null,
   activeTimelineLoopTimeout: null,
+  isTimelinePlaying: false,
+  isTimelinePaused: false,
+  timelineStartTimeContext: null,
+  timelineDurationMs: 60000,
 
   setSelectedElementId: id => set({ selectedElementId: id }),
 
@@ -196,10 +207,14 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   stopAll: () => {
-    const { sources, activeTimelineLoopTimeout } = get();
+    const { sources, activeTimelineLoopTimeout, audioContext } = get();
     if (activeTimelineLoopTimeout !== null) {
       clearTimeout(activeTimelineLoopTimeout);
       set({ activeTimelineLoopTimeout: null });
+    }
+
+    if (audioContext?.state === 'suspended') {
+      audioContext.resume().catch(console.error);
     }
 
     sources.forEach(source => {
@@ -213,7 +228,12 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         source.isPlaying = false;
       }
     });
-    set({ sources: new Map(sources) });
+    set({
+      sources: new Map(sources),
+      isTimelinePlaying: false,
+      isTimelinePaused: false,
+      timelineStartTimeContext: null,
+    });
   },
 
   toggleLoop: elementId => {
@@ -284,7 +304,26 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       sources: new Map(),
       isInitialized: false,
       activeTimelineLoopTimeout: null,
+      isTimelinePlaying: false,
+      isTimelinePaused: false,
+      timelineStartTimeContext: null,
     });
+  },
+
+  pauseTimeline: async () => {
+    const { audioContext, isTimelinePlaying, isTimelinePaused } = get();
+    if (audioContext && isTimelinePlaying && !isTimelinePaused) {
+      await audioContext.suspend();
+      set({ isTimelinePaused: true, isTimelinePlaying: true });
+    }
+  },
+
+  resumeTimeline: async () => {
+    const { audioContext, isTimelinePlaying, isTimelinePaused } = get();
+    if (audioContext && isTimelinePlaying && isTimelinePaused) {
+      await audioContext.resume();
+      set({ isTimelinePaused: false, isTimelinePlaying: true });
+    }
   },
 
   playScheduled: async (elementId, delayMs, playDurationMs, fadeInDuration = 0) => {
@@ -340,8 +379,16 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   crossfadeToTimeline: (timelineElements, isLooping = false) => {
-    const { audioContext, sources, playScheduled, activeTimelineLoopTimeout } = get();
+    const { audioContext, sources, playScheduled, activeTimelineLoopTimeout, isTimelinePaused } =
+      get();
     if (!audioContext) return;
+
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch(console.error);
+    }
+    if (isTimelinePaused) {
+      set({ isTimelinePaused: false });
+    }
 
     if (activeTimelineLoopTimeout !== null) {
       clearTimeout(activeTimelineLoopTimeout);
@@ -350,6 +397,15 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
 
     const now = audioContext.currentTime;
     const fadeOutDuration = 2.0; // 2 seconds crossfade
+
+    let maxEndMs = 0;
+    timelineElements.forEach(te => {
+      const endMs = te.start_time_ms + te.duration_ms;
+      if (endMs > maxEndMs) maxEndMs = endMs;
+    });
+
+    // Ensure we track a default duration even if empty
+    if (maxEndMs === 0) maxEndMs = 60000;
 
     // Fade out all currently playing
     sources.forEach(source => {
@@ -373,12 +429,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     });
 
     const scheduleTimelineChunk = () => {
-      let maxEndMs = 0;
-
       timelineElements.forEach(te => {
-        const endMs = te.start_time_ms + te.duration_ms;
-        if (endMs > maxEndMs) maxEndMs = endMs;
-
         // if element starts within the crossfade window, fade it in
         const fadeIn = te.start_time_ms < fadeOutDuration * 1000 ? fadeOutDuration : 0;
         playScheduled(te.audio_element_id, te.start_time_ms, te.duration_ms, fadeIn).catch(
@@ -386,8 +437,21 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
         );
       });
 
+      const currentContextTime = get().audioContext?.currentTime || 0;
+      set({
+        isTimelinePlaying: true,
+        timelineStartTimeContext: currentContextTime,
+        timelineDurationMs: maxEndMs,
+      });
+
       if (isLooping && maxEndMs > 0) {
         const timeoutId = setTimeout(scheduleTimelineChunk, maxEndMs);
+        set({ activeTimelineLoopTimeout: timeoutId as unknown as number });
+      } else if (!isLooping && maxEndMs > 0) {
+        // Automatically stop the timeline once it reaches the end if not looping
+        const timeoutId = setTimeout(() => {
+          set({ isTimelinePlaying: false, timelineStartTimeContext: null });
+        }, maxEndMs);
         set({ activeTimelineLoopTimeout: timeoutId as unknown as number });
       }
     };
