@@ -209,7 +209,64 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
         conn.execute("UPDATE timeline_elements SET track_id = (SELECT id FROM timeline_tracks WHERE timeline_tracks.timeline_id = timeline_elements.timeline_id)", [])?;
     }
 
+    // Timeline deduplication migration
+    let mut stmt = conn.prepare(
+        "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='ux_timelines_mood_id'",
+    )?;
+    let has_unique_timeline_index = stmt
+        .query_row([], |row| {
+            let count: i64 = row.get(0)?;
+            Ok(count > 0)
+        })
+        .unwrap_or(false);
+
+    if !has_unique_timeline_index {
+        // Keep the oldest timeline per mood, delete the rest
+        conn.execute(
+            "DELETE FROM timelines WHERE id NOT IN (
+                SELECT MIN(id) FROM timelines GROUP BY mood_id
+            )",
+            [],
+        )?;
+
+        // Create unique index
+        conn.execute(
+            "CREATE UNIQUE INDEX ux_timelines_mood_id ON timelines(mood_id)",
+            [],
+        )?;
+    }
+
     Ok(())
+}
+
+fn check_element_overlap(
+    conn: &Connection,
+    track_id: i64,
+    start_time_ms: i64,
+    duration_ms: i64,
+    exclude_id: Option<i64>,
+) -> Result<bool, String> {
+    let end_time_ms = start_time_ms + duration_ms;
+
+    let query = match exclude_id {
+        Some(_) => "SELECT count(*) FROM timeline_elements WHERE track_id = ?1 AND id != ?2 AND start_time_ms < ?3 AND (start_time_ms + duration_ms) > ?4",
+        None => "SELECT count(*) FROM timeline_elements WHERE track_id = ?1 AND start_time_ms < ?2 AND (start_time_ms + duration_ms) > ?3",
+    };
+
+    let mut stmt = conn.prepare(query).map_err(|e| e.to_string())?;
+
+    let count: i64 = match exclude_id {
+        Some(id) => stmt
+            .query_row([&track_id, &id, &end_time_ms, &start_time_ms], |row| {
+                row.get(0)
+            })
+            .map_err(|e| e.to_string())?,
+        None => stmt
+            .query_row([&track_id, &end_time_ms, &start_time_ms], |row| row.get(0))
+            .map_err(|e| e.to_string())?,
+    };
+
+    Ok(count > 0)
 }
 
 #[tauri::command]
@@ -423,17 +480,27 @@ async fn create_timeline(
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
-    // Get max order index
-    let mut stmt = conn
-        .prepare("SELECT COALESCE(MAX(order_index), -1) + 1 FROM timelines WHERE mood_id = ?1")
-        .map_err(|e| e.to_string())?;
-    let order_index: i64 = stmt
-        .query_row([&mood_id], |row| row.get(0))
-        .map_err(|e| e.to_string())?;
+    // Check if one already exists
+    let mut stmt = conn.prepare("SELECT id, name, order_index, is_looping, created_at FROM timelines WHERE mood_id = ?1").map_err(|e| e.to_string())?;
+
+    let existing = stmt.query_row([&mood_id], |row| {
+        Ok(Timeline {
+            id: row.get(0)?,
+            mood_id,
+            name: row.get(1)?,
+            order_index: row.get(2)?,
+            is_looping: row.get::<_, i64>(3)? != 0,
+            created_at: row.get(4)?,
+        })
+    });
+
+    if let Ok(timeline) = existing {
+        return Ok(timeline);
+    }
 
     conn.execute(
-        "INSERT INTO timelines (mood_id, name, order_index, is_looping) VALUES (?1, ?2, ?3, 0)",
-        [&mood_id.to_string(), &name, &order_index.to_string()],
+        "INSERT INTO timelines (mood_id, name, order_index, is_looping) VALUES (?1, ?2, 0, 0)",
+        [&mood_id.to_string(), &name],
     )
     .map_err(|e| e.to_string())?;
 
@@ -443,7 +510,7 @@ async fn create_timeline(
         id,
         mood_id,
         name,
-        order_index,
+        order_index: 0,
         is_looping: false,
         created_at: chrono::Local::now().to_rfc3339(),
     })
@@ -608,6 +675,10 @@ async fn add_element_to_track(
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
+    if check_element_overlap(&conn, track_id, start_time_ms, duration_ms, None)? {
+        return Err("Element overlaps with existing element in track".to_string());
+    }
+
     let timeline_id: i64 = conn
         .query_row(
             "SELECT timeline_id FROM timeline_tracks WHERE id = ?1",
@@ -675,6 +746,18 @@ async fn update_element_time_and_duration(
 ) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let track_id: i64 = conn
+        .query_row(
+            "SELECT track_id FROM timeline_elements WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if check_element_overlap(&conn, track_id, start_time_ms, duration_ms, Some(id))? {
+        return Err("Element overlaps with existing element in track".to_string());
+    }
 
     conn.execute(
         "UPDATE timeline_elements SET start_time_ms = ?1, duration_ms = ?2 WHERE id = ?3",
@@ -749,4 +832,130 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn test_timeline_migration_singleton() {
+        let mut conn = Connection::open_in_memory().unwrap();
+
+        // Setup initial old schema without unique index
+        conn.execute_batch(
+            "CREATE TABLE timelines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mood_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                order_index INTEGER DEFAULT 0,
+                is_looping INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );",
+        )
+        .unwrap();
+
+        // Insert multiple timelines for same mood
+        conn.execute(
+            "INSERT INTO timelines (id, mood_id, name) VALUES (1, 10, 'First')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timelines (id, mood_id, name) VALUES (2, 10, 'Second')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timelines (id, mood_id, name) VALUES (3, 20, 'Other Mood')",
+            [],
+        )
+        .unwrap();
+
+        // Run full database init which includes the migration
+        let _ = init_database(&conn).unwrap();
+
+        // Verify deductions
+        let mut stmt = conn
+            .prepare("SELECT id, name FROM timelines WHERE mood_id = 10")
+            .unwrap();
+        let timelines: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        // Should only have kept the oldest (id = 1)
+        assert_eq!(timelines.len(), 1);
+        assert_eq!(timelines[0].0, 1);
+        assert_eq!(timelines[0].1, "First");
+
+        // Verify we can't insert another one
+        let err = conn.execute(
+            "INSERT INTO timelines (mood_id, name) VALUES (10, 'Third')",
+            [],
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_element_overlap_rejection() {
+        let conn = Connection::open_in_memory().unwrap();
+        let _ = init_database(&conn).unwrap();
+
+        // Setup base tables
+        conn.execute(
+            "INSERT INTO sound_sets (id, name, description) VALUES (1, 'S', 'D')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO audio_elements (id, sound_set_id, file_path, file_name, channel_type) VALUES (100, 1, 'path', 'f', 'music')", []).unwrap();
+        conn.execute(
+            "INSERT INTO moods (id, sound_set_id, name) VALUES (1, 1, 'M')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timelines (id, mood_id, name) VALUES (1, 1, 'T')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timeline_tracks (id, timeline_id, name) VALUES (5, 1, 'Trk')",
+            [],
+        )
+        .unwrap();
+
+        // Add element 1: 1000ms to 3000ms (duration 2000ms)
+        conn.execute("INSERT INTO timeline_elements (id, track_id, audio_element_id, start_time_ms, duration_ms) VALUES (10, 5, 100, 1000, 2000)", []).unwrap();
+
+        // Test overlap checks
+        // 1. Completely before (0-500) - OK
+        assert!(!check_element_overlap(&conn, 5, 0, 500, None).unwrap());
+
+        // 2. Exactly before (0-1000) - OK
+        assert!(!check_element_overlap(&conn, 5, 0, 1000, None).unwrap());
+
+        // 3. Completely after (3000-4000) - OK
+        assert!(!check_element_overlap(&conn, 5, 3000, 1000, None).unwrap());
+
+        // 4. Overlap start (500-1500) - BAD
+        assert!(check_element_overlap(&conn, 5, 500, 1000, None).unwrap());
+
+        // 5. Overlap end (2500-3500) - BAD
+        assert!(check_element_overlap(&conn, 5, 2500, 1000, None).unwrap());
+
+        // 6. Enclosing (500-4000) - BAD
+        assert!(check_element_overlap(&conn, 5, 500, 3500, None).unwrap());
+
+        // 7. Contained (1500-2500) - BAD
+        assert!(check_element_overlap(&conn, 5, 1500, 1000, None).unwrap());
+
+        // 8. Overlapping itself when excluded - OK
+        assert!(!check_element_overlap(&conn, 5, 500, 1500, Some(10)).unwrap());
+
+        // 9. Different track overlap - OK
+        assert!(!check_element_overlap(&conn, 6, 1500, 1000, None).unwrap());
+    }
 }

@@ -1,18 +1,16 @@
 import { useEffect, useState } from 'react';
 
-import { DragDropContext, Draggable, Droppable, DropResult } from '@hello-pangea/dnd';
+import { Draggable, Droppable } from '@hello-pangea/dnd';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { AnimatePresence, motion } from 'framer-motion';
 
-import { TimelineEditor } from './TimelineEditor';
 import { IconPause, IconPlay, IconRepeat, IconTrash } from '../../../shared/components/Icons';
 import { Waveform } from '../../../shared/components/Waveform';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
 import { useMixerStore } from '../../mixer/stores/mixerStore';
 import { AudioElement, useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
-import { useTimelineStore } from '../../sound-sets/stores/timelineStore';
 import { useAudioEngineStore } from '../stores/audioEngineStore';
 
 interface AudioUploaderProps {
@@ -109,74 +107,8 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
     }
   };
 
-  const handleDragEnd = (result: DropResult) => {
-    const { destination, draggableId } = result;
-
-    if (!destination) {
-      error(`Drop failed: no destination (dragged ${draggableId})`);
-      return;
-    }
-
-    const elementId = parseInt(draggableId, 10);
-    if (isNaN(elementId)) return;
-
-    if (destination.droppableId === 'effects-zone') {
-      useSoundSetStore.getState().updateAudioElementChannel(elementId, 'effects');
-      return;
-    }
-
-    const timelineTrackMatch = destination.droppableId.match(/^timeline-track-(\d+)$/);
-    if (timelineTrackMatch) {
-      const { selectedTimelineId, addElementToTrack } = useTimelineStore.getState();
-      if (!selectedTimelineId) {
-        error('Selecione uma timeline primeiro.');
-        return;
-      }
-
-      const targetTrackId = Number(timelineTrackMatch[1]);
-      const targetTrackElement = document.getElementById(
-        `timeline-track-container-${targetTrackId}`
-      );
-
-      if (!targetTrackElement) {
-        error('Elemento não solto sobre uma trilha válida.');
-        return;
-      }
-
-      const dropX = (window as any).__lastDragX;
-      let startTimeMs = 0;
-
-      if (typeof dropX === 'number') {
-        const rect = targetTrackElement.getBoundingClientRect();
-        const relativeX = dropX - rect.left + targetTrackElement.scrollLeft;
-        const trackWidth = Math.max(targetTrackElement.scrollWidth, targetTrackElement.clientWidth);
-        const percentage = Math.max(0, Math.min(100, (relativeX / trackWidth) * 100));
-        startTimeMs = Math.round((percentage / 100) * 60000);
-      }
-
-      // Estimate duration from loaded audio buffer
-      const audioSource = useAudioEngineStore.getState().sources.get(elementId);
-      const durationMs = audioSource?.buffer
-        ? Math.round(audioSource.buffer.duration * 1000)
-        : 10000;
-
-      addElementToTrack(targetTrackId, elementId, startTimeMs, durationMs)
-        .then(() => {
-          success(
-            `Elemento ${elementId} na trilha ${targetTrackId} (${startTimeMs}ms - duração ${durationMs}ms)`
-          );
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          error('Falha ao adicionar elemento à timeline: ' + message);
-        });
-    } else {
-      error(`Destino de drop inválido: ${destination.droppableId}`);
-    }
-  };
-
   return (
-    <DragDropContext onDragEnd={handleDragEnd}>
+    <>
       <div className="flex flex-col h-full space-y-6 p-8 max-w-[1600px] mx-auto w-full">
         {/* Elements Grid - Main Mixing Board */}
         <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar">
@@ -288,11 +220,8 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
             </div>
           )}
         </Droppable>
-
-        {/* Timeline Section - At the very bottom */}
-        <TimelineEditor moodId={_moodId} />
       </div>
-    </DragDropContext>
+    </>
   );
 }
 

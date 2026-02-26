@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { Activity, Settings, Volume2, VolumeX } from 'lucide-react';
+import { Activity, Settings, Volume2, VolumeX, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { MasterControls } from './MasterControls';
 import { Cluster } from '../../../shared/components/layout/Cluster';
@@ -10,29 +10,83 @@ import { useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
 import { useTimelineStore } from '../../sound-sets/stores/timelineStore';
 
 export function BottomPlayer() {
-  const { selectedSoundSet, selectedMood } = useSoundSetStore();
+  const { selectedSoundSet, selectedMood, soundSets, moods } = useSoundSetStore();
   const {
     selectedTimelineId,
     timelines,
     elements: timelineElements,
     toggleTimelineLoop,
+    isExpanded,
+    setIsExpanded,
   } = useTimelineStore();
-  const { sources, stopAll, crossfadeToTimeline, globalVolume, setGlobalVolume } =
-    useAudioEngineStore();
+  const {
+    sources,
+    stopAll,
+    crossfadeToTimeline,
+    globalVolume,
+    setGlobalVolume,
+    isTimelinePlaying,
+    isTimelinePaused,
+    pauseTimeline,
+    resumeTimeline,
+    activePlaybackContext,
+    setTimelineLoopEnabled,
+  } = useAudioEngineStore();
 
   const [isMasterMuted, setIsMasterMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(1);
 
   // Derive playing status
   const playingCount = Array.from(sources.values()).filter(s => s.isPlaying).length;
-  const isPlaying = playingCount > 0;
+  const isPlaying = (isTimelinePlaying && !isTimelinePaused) || playingCount > 0;
+
   const activeTimeline = timelines.find(t => t.id === selectedTimelineId);
+
+  const displaySoundSet = activePlaybackContext
+    ? soundSets.find(s => s.id === activePlaybackContext.soundSetId) || selectedSoundSet
+    : selectedSoundSet;
+
+  const displayMood = activePlaybackContext
+    ? moods.find(m => m.id === activePlaybackContext.moodId) || selectedMood
+    : selectedMood;
+
+  const displayTimelineName = activePlaybackContext?.timelineId
+    ? timelines.find(t => t.id === activePlaybackContext.timelineId)?.name || 'Main Timeline'
+    : selectedTimelineId
+      ? timelines.find(t => t.id === selectedTimelineId)?.name
+      : null;
 
   const handleTogglePlay = () => {
     if (isPlaying) {
-      stopAll();
-    } else if (selectedTimelineId && timelineElements.length > 0) {
-      crossfadeToTimeline(timelineElements, activeTimeline?.is_looping);
+      if (isTimelinePlaying && !isTimelinePaused) {
+        if (
+          selectedMood?.id !== activePlaybackContext?.moodId &&
+          selectedSoundSet &&
+          selectedMood &&
+          selectedTimelineId
+        ) {
+          // Crossfade to new mood
+          crossfadeToTimeline(timelineElements, activeTimeline?.is_looping, {
+            soundSetId: selectedSoundSet.id,
+            moodId: selectedMood.id,
+            timelineId: selectedTimelineId,
+          });
+        } else {
+          pauseTimeline();
+        }
+      } else {
+        stopAll();
+      }
+    } else {
+      if (isTimelinePaused && selectedMood?.id === activePlaybackContext?.moodId) {
+        resumeTimeline();
+      } else if (selectedTimelineId && selectedSoundSet && selectedMood) {
+        crossfadeToTimeline(timelineElements, activeTimeline?.is_looping, {
+          soundSetId: selectedSoundSet.id,
+          moodId: selectedMood.id,
+          timelineId: selectedTimelineId,
+        });
+      }
     }
   };
 
@@ -57,6 +111,13 @@ export function BottomPlayer() {
     }
   };
 
+  const handleToggleTimelineLoop = () => {
+    if (!selectedTimelineId || !activeTimeline) return;
+    const nextLoopValue = !activeTimeline.is_looping;
+    toggleTimelineLoop(selectedTimelineId, nextLoopValue);
+    setTimelineLoopEnabled(nextLoopValue);
+  };
+
   return (
     <div className="bg-[#0f0f15] h-full flex flex-col justify-center px-6">
       <div className="max-w-screen-2xl mx-auto w-full">
@@ -72,16 +133,14 @@ export function BottomPlayer() {
             </div>
             <Stack gap={0} className="min-w-0 flex-1 overflow-hidden">
               <p className="text-sm font-bold text-gray-200 truncate">
-                {selectedSoundSet ? selectedSoundSet.name : 'No SoundSet Selected'}
+                {displaySoundSet ? displaySoundSet.name : 'No SoundSet Selected'}
               </p>
               <p className="text-xs text-gray-500 truncate font-medium tracking-wide">
-                {selectedMood ? selectedMood.name : 'No Mood Selected'}
-                {selectedTimelineId && (
+                {displayMood ? displayMood.name : 'No Mood Selected'}
+                {displayTimelineName && (
                   <>
                     <span className="mx-2">•</span>
-                    <span className="text-cyan-400">
-                      Timeline: {timelines.find(t => t.id === selectedTimelineId)?.name}
-                    </span>
+                    <span className="text-cyan-400">Timeline: {displayTimelineName}</span>
                   </>
                 )}
                 <span className="mx-2">•</span>
@@ -99,7 +158,7 @@ export function BottomPlayer() {
             />
             {selectedTimelineId && (
               <button
-                onClick={() => toggleTimelineLoop(selectedTimelineId, !activeTimeline?.is_looping)}
+                onClick={handleToggleTimelineLoop}
                 className={`absolute -right-12 p-2 rounded-full transition-colors ${
                   activeTimeline?.is_looping
                     ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20'
@@ -128,6 +187,23 @@ export function BottomPlayer() {
 
           {/* Master Volume */}
           <Cluster gap={2} align="center" justify="end" className="flex-1 text-gray-500">
+            {selectedSoundSet && selectedMood && (
+              <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="group flex flex-col items-center justify-center focus:outline-none mr-2"
+                title="Alternar Sequenciador"
+              >
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors">
+                  <span className="text-[10px] font-bold text-gray-500 group-hover:text-cyan-400 uppercase tracking-[0.2em] transition-colors hidden lg:block">
+                    Sequencer
+                  </span>
+                  <div className="text-gray-500 group-hover:text-cyan-400 transition-colors">
+                    {isExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                  </div>
+                </div>
+              </button>
+            )}
+
             <button
               onClick={handleToggleMute}
               className="p-2 hover:text-white hover:bg-white/5 rounded-full transition-colors flex-shrink-0"

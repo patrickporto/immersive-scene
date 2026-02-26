@@ -53,4 +53,18 @@ describe('audioEngineStore scheduling', () => {
     // Should have scheduled the identical chunk again
     expect(playScheduledMock).toHaveBeenCalledTimes(2);
   });
+
+  it('crossfadeToTimeline evaluates and sets activePlaybackContext state', () => {
+    const timelineElements = [{ audio_element_id: 1, start_time_ms: 0, duration_ms: 2000 }];
+    const context = { soundSetId: 10, moodId: 20, timelineId: 30 };
+
+    useAudioEngineStore.getState().crossfadeToTimeline(timelineElements, false, context);
+
+    // Fast forward setTimeout
+    vi.advanceTimersByTime(100);
+
+    const state = useAudioEngineStore.getState();
+    expect(state.activePlaybackContext).toEqual(context);
+    expect(state.isTimelinePlaying).toBe(true);
+  });
 });

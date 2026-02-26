@@ -7,9 +7,16 @@ interface TooltipProps {
   content: string;
   position?: 'top' | 'bottom' | 'left' | 'right';
   delay?: number;
+  className?: string;
 }
 
-export function Tooltip({ children, content, position = 'top', delay = 0.3 }: TooltipProps) {
+export function Tooltip({
+  children,
+  content,
+  position = 'top',
+  delay = 0.3,
+  className,
+}: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [timeoutId, setTimeoutId] = useState<ReturnType<typeof setTimeout> | null>(null);
 
@@ -41,7 +48,7 @@ export function Tooltip({ children, content, position = 'top', delay = 0.3 }: To
 
   return (
     <div
-      className="relative inline-block"
+      className={`relative inline-block ${className || ''}`}
       onMouseEnter={show}
       onMouseLeave={hide}
       onFocus={show}

@@ -52,7 +52,10 @@ interface TimelineState {
   elements: TimelineElement[];
   selectedTimelineId: number | null;
   isLoading: boolean;
+  isExpanded: boolean;
   error: string | null;
+
+  setIsExpanded: (expanded: boolean) => void;
 
   loadTimelines: (moodId: number) => Promise<void>;
   createTimeline: (moodId: number, name: string) => Promise<void>;
@@ -86,7 +89,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   elements: [],
   selectedTimelineId: null,
   isLoading: false,
+  isExpanded: true,
   error: null,
+
+  setIsExpanded: isExpanded => set({ isExpanded }),
 
   loadTimelines: async moodId => {
     set({ isLoading: true, error: null });
