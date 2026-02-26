@@ -463,6 +463,14 @@ Only add complexity with:
 - Prefer verb-led prefixes: `add-`, `update-`, `remove-`, `refactor-`
 - Ensure uniqueness; if taken, append `-2`, `-3`, etc.
 
+## Design System Components
+
+When building UI, prefer using existing shared components to maintain consistency:
+
+### Modal (`src/shared/components/Modal.tsx`)
+A reusable dialog component with backdrop, keyboard accessibility (Escape to close), and focus trapping.
+- **Props**: `isOpen` (boolean), `onClose` (function), `title` (ReactNode), `children` (ReactNode), `footer` (ReactNode, optional), `size` ('sm' | 'md' | 'lg' | 'xl' | 'full', default 'md'), `className` (string, optional).
+
 ## Tool Selection Guide
 
 | Task                  | Tool | Why                      |

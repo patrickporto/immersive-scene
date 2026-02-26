@@ -165,11 +165,26 @@ export function IconChevronLeft(props: ComponentProps<'svg'>) {
     </Icon>
   );
 }
-
 export function IconChevronRight(props: ComponentProps<'svg'>) {
   return (
     <Icon {...props}>
       <polyline points="9 18 15 12 9 6" />
+    </Icon>
+  );
+}
+
+export function IconCloud(props: ComponentProps<'svg'>) {
+  return (
+    <Icon {...props}>
+      <path d="M17.5 19a4.5 4.5 0 0 0 1-8.87 9 9 0 0 0-16.7 3.33A5 5 0 0 0 7 19h10.5z" />
+    </Icon>
+  );
+}
+
+export function IconZap(props: ComponentProps<'svg'>) {
+  return (
+    <Icon {...props}>
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
     </Icon>
   );
 }

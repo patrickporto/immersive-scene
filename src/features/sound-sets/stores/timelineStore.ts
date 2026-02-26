@@ -112,8 +112,6 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
         timelines: [...state.timelines, newTimeline],
         isLoading: false,
       }));
-      // Automatically create a default track for new timelines
-      await get().createTimelineTrack(newTimeline.id, 'Track 1');
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }

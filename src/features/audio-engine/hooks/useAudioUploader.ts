@@ -28,40 +28,46 @@ export function useAudioUploader({ soundSetId }: UseAudioUploaderOptions) {
 
   usePreloadAudioElements();
 
-  const handleUpload = async () => {
+  const selectFiles = async () => {
     try {
       const selected = await open({
         multiple: true,
         filters: [{ name: 'Audio Files', extensions: ['ogg', 'mp3', 'wav', 'flac'] }],
       });
-
-      if (!selected) {
-        return;
-      }
-
-      setIsUploading(true);
-      await initAudioContext();
+      if (!selected) return [];
 
       const files = Array.isArray(selected) ? selected : [selected];
+      return files.filter(filePath => {
+        const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'unknown';
+        const extension = `.${fileName.split('.').pop()?.toLowerCase()}`;
+        return VALID_EXTENSIONS.includes(extension);
+      });
+    } catch (err) {
+      console.error('File selection failed:', err);
+      return [];
+    }
+  };
+
+  const processUpload = async (files: string[], channelId: number | null) => {
+    if (files.length === 0) return;
+    setIsUploading(true);
+    await initAudioContext();
+
+    try {
       let uploadCount = 0;
 
       for (const filePath of files) {
         const fileName = filePath.split('/').pop() || filePath.split('\\').pop() || 'unknown';
-        const extension = `.${fileName.split('.').pop()?.toLowerCase()}`;
-        if (!VALID_EXTENSIONS.includes(extension)) {
-          continue;
-        }
 
         try {
           const fileData = await readFile(filePath);
-          await createAudioElement(soundSetId, filePath, fileName, 'ambient');
-          await loadAudioElements(soundSetId);
-
-          const latestElements = useSoundSetStore.getState().audioElements;
-          const newElement = latestElements.find(element => element.file_path === filePath);
-          if (!newElement) {
-            continue;
-          }
+          const newElement = await createAudioElement(
+            soundSetId,
+            filePath,
+            fileName,
+            'ambient',
+            channelId
+          );
 
           await loadAudioFile(newElement, fileData.buffer.slice(0));
           uploadCount += 1;
@@ -87,6 +93,7 @@ export function useAudioUploader({ soundSetId }: UseAudioUploaderOptions) {
 
   return {
     isUploading,
-    handleUpload,
+    selectFiles,
+    processUpload,
   };
 }

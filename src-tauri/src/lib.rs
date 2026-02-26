@@ -6,12 +6,70 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
 
+pub mod import_export;
+pub use import_export::*;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SoundSet {
     pub id: i64,
     pub name: String,
     pub description: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AppSettings {
+    pub audio_file_strategy: String, // "reference" or "copy"
+    pub library_path: String,
+}
+
+pub(crate) fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
+    let app_dir = app_handle.path().app_data_dir().unwrap();
+    fs::create_dir_all(&app_dir).unwrap();
+    app_dir.join("settings.json")
+}
+
+pub(crate) fn get_default_library_path(app_handle: &AppHandle) -> PathBuf {
+    let app_dir = app_handle.path().app_data_dir().unwrap();
+    app_dir.join("library").join("audio")
+}
+
+pub(crate) fn read_app_settings(app_handle: &AppHandle) -> AppSettings {
+    let settings_path = get_settings_path(app_handle);
+    let default_library_path = get_default_library_path(app_handle)
+        .to_string_lossy()
+        .to_string();
+
+    if settings_path.exists() {
+        if let Ok(content) = fs::read_to_string(&settings_path) {
+            if let Ok(mut settings) = serde_json::from_str::<AppSettings>(&content) {
+                if settings.library_path.trim().is_empty() {
+                    settings.library_path = default_library_path;
+                }
+                return settings;
+            }
+        }
+    }
+
+    AppSettings {
+        audio_file_strategy: "reference".to_string(),
+        library_path: default_library_path,
+    }
+}
+
+#[tauri::command]
+async fn get_app_settings(app_handle: AppHandle) -> Result<AppSettings, String> {
+    Ok(read_app_settings(&app_handle))
+}
+
+#[tauri::command]
+async fn update_app_settings(app_handle: AppHandle, settings: AppSettings) -> Result<(), String> {
+    let settings_path = get_settings_path(&app_handle);
+
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(settings_path, json).map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,9 +82,21 @@ pub struct Mood {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AudioElement {
+pub struct AudioChannel {
     pub id: i64,
     pub sound_set_id: i64,
+    pub name: String,
+    pub icon: String,
+    pub volume: f64,
+    pub order_index: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AudioElement {
+    pub id: i64,
+    pub sound_set_id: Option<i64>,
+    pub channel_id: Option<i64>,
     pub file_path: String,
     pub file_name: String,
     pub channel_type: String,
@@ -92,15 +162,31 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
     )?;
 
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS audio_elements (
+        "CREATE TABLE IF NOT EXISTS audio_channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sound_set_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            icon TEXT NOT NULL DEFAULT 'generic',
+            volume REAL NOT NULL DEFAULT 1.0,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (sound_set_id) REFERENCES sound_sets(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS audio_elements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sound_set_id INTEGER,
+            channel_id INTEGER,
             file_path TEXT NOT NULL,
             file_name TEXT NOT NULL,
             channel_type TEXT DEFAULT 'ambient',
             volume_db REAL DEFAULT 0.0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (sound_set_id) REFERENCES sound_sets(id) ON DELETE CASCADE
+            FOREIGN KEY (sound_set_id) REFERENCES sound_sets(id) ON DELETE CASCADE,
+            FOREIGN KEY (channel_id) REFERENCES audio_channels(id) ON DELETE SET NULL
         )",
         [],
     )?;
@@ -186,6 +272,40 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
         )?;
     }
 
+    // Audio channels migration
+    let mut stmt = conn.prepare("PRAGMA table_info(audio_elements)")?;
+    let has_channel_id = stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "channel_id")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if !has_channel_id {
+        conn.execute(
+            "ALTER TABLE audio_elements ADD COLUMN channel_id INTEGER REFERENCES audio_channels(id)",
+            [],
+        )?;
+
+        // Ensure default Music channel exists for all soundsets that have elements before we update
+        conn.execute(
+            "INSERT INTO audio_channels (sound_set_id, name, icon, volume, order_index)
+             SELECT DISTINCT sound_set_id, 'Music', 'music', 1.0, 0 
+             FROM audio_elements WHERE sound_set_id NOT IN (SELECT sound_set_id FROM audio_channels WHERE name = 'Music')",
+            [],
+        )?;
+
+        // Assign existing elements to the Music channel of their sound set
+        conn.execute(
+            "UPDATE audio_elements SET channel_id = (
+                SELECT id FROM audio_channels 
+                WHERE audio_channels.sound_set_id = audio_elements.sound_set_id 
+                AND audio_channels.name = 'Music' LIMIT 1
+            )",
+            [],
+        )?;
+    }
+
     // Timeline elements migration for tracks and duration
     let mut stmt = conn.prepare("PRAGMA table_info(timeline_elements)")?;
     let has_track_id = stmt
@@ -234,6 +354,79 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             "CREATE UNIQUE INDEX ux_timelines_mood_id ON timelines(mood_id)",
             [],
         )?;
+    }
+
+    // Global one-shots migration (drop legacy mood_id and allow global rows)
+    let mut stmt = conn.prepare("PRAGMA table_info(audio_elements)")?;
+    let is_sound_set_id_not_null = stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            let notnull: bool = row.get(3)?;
+            Ok(name == "sound_set_id" && notnull)
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    let needs_audio_elements_rebuild = has_mood_id || is_sound_set_id_not_null;
+
+    if needs_audio_elements_rebuild {
+        conn.execute("PRAGMA foreign_keys=off;", [])?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS audio_elements_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sound_set_id INTEGER,
+                channel_id INTEGER,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                channel_type TEXT DEFAULT 'ambient',
+                volume_db REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sound_set_id) REFERENCES sound_sets(id) ON DELETE CASCADE,
+                FOREIGN KEY (channel_id) REFERENCES audio_channels(id) ON DELETE SET NULL
+            )",
+            [],
+        )?;
+
+        if has_mood_id {
+            conn.execute(
+                "INSERT INTO audio_elements_new (id, sound_set_id, channel_id, file_path, file_name, channel_type, volume_db, created_at)
+                 SELECT
+                    id,
+                    COALESCE(
+                        sound_set_id,
+                        (SELECT sound_set_id FROM moods WHERE moods.id = audio_elements.mood_id)
+                    ),
+                    channel_id,
+                    file_path,
+                    file_name,
+                    channel_type,
+                    volume_db,
+                    created_at
+                 FROM audio_elements",
+                [],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO audio_elements_new (id, sound_set_id, channel_id, file_path, file_name, channel_type, volume_db, created_at)
+                 SELECT
+                    id,
+                    sound_set_id,
+                    channel_id,
+                    file_path,
+                    file_name,
+                    channel_type,
+                    volume_db,
+                    created_at
+                 FROM audio_elements",
+                [],
+            )?;
+        }
+
+        conn.execute("DROP TABLE audio_elements", [])?;
+        conn.execute(
+            "ALTER TABLE audio_elements_new RENAME TO audio_elements",
+            [],
+        )?;
+        conn.execute("PRAGMA foreign_keys=on;", [])?;
     }
 
     Ok(())
@@ -384,27 +577,58 @@ async fn get_moods(app_handle: AppHandle, sound_set_id: i64) -> Result<Vec<Mood>
 }
 
 #[tauri::command]
+async fn delete_mood(app_handle: AppHandle, id: i64) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute("DELETE FROM moods WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn create_audio_element(
     app_handle: AppHandle,
     sound_set_id: i64,
     file_path: String,
     file_name: String,
     channel_type: String,
+    channel_id: Option<i64>,
 ) -> Result<AudioElement, String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
+    let settings = get_app_settings(app_handle.clone()).await?;
+    let mut final_file_path = file_path.clone();
+
+    if settings.audio_file_strategy == "copy" {
+        let library_dir = if settings.library_path.trim().is_empty() {
+            get_default_library_path(&app_handle)
+        } else {
+            PathBuf::from(&settings.library_path)
+        };
+        if !library_dir.exists() {
+            fs::create_dir_all(&library_dir).map_err(|e| e.to_string())?;
+        }
+
+        let destination = library_dir.join(&file_name);
+        fs::copy(&file_path, &destination).map_err(|e| e.to_string())?;
+        final_file_path = destination.to_string_lossy().to_string();
+    }
+
     conn.execute(
-        "INSERT INTO audio_elements (sound_set_id, file_path, file_name, channel_type) VALUES (?1, ?2, ?3, ?4)",
-        [&sound_set_id.to_string(), &file_path, &file_name, &channel_type],
+        "INSERT INTO audio_elements (sound_set_id, file_path, file_name, channel_type, channel_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (&sound_set_id, &final_file_path, &file_name, &channel_type, &channel_id),
     ).map_err(|e| e.to_string())?;
 
     let id = conn.last_insert_rowid();
 
     Ok(AudioElement {
         id,
-        sound_set_id,
-        file_path,
+        sound_set_id: Some(sound_set_id),
+        channel_id,
+        file_path: final_file_path,
         file_name,
         channel_type,
         volume_db: 0.0,
@@ -421,7 +645,7 @@ async fn get_audio_elements(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, sound_set_id, file_path, file_name, channel_type, volume_db, created_at FROM audio_elements WHERE sound_set_id = ?1 ORDER BY created_at DESC"
+        "SELECT id, sound_set_id, file_path, file_name, channel_type, volume_db, created_at, channel_id FROM audio_elements WHERE sound_set_id = ?1 ORDER BY created_at DESC"
     ).map_err(|e| e.to_string())?;
 
     let elements = stmt
@@ -434,6 +658,7 @@ async fn get_audio_elements(
                 channel_type: row.get(4)?,
                 volume_db: row.get(5)?,
                 created_at: row.get(6)?,
+                channel_id: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -464,7 +689,25 @@ async fn update_audio_element_channel(
 
     conn.execute(
         "UPDATE audio_elements SET channel_type = ?1 WHERE id = ?2",
-        [&channel_type, &id.to_string()],
+        (&channel_type, &id),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_audio_element_channel_id(
+    app_handle: AppHandle,
+    id: i64,
+    channel_id: Option<i64>,
+) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE audio_elements SET channel_id = ?1 WHERE id = ?2",
+        (&channel_id, &id),
     )
     .map_err(|e| e.to_string())?;
 
@@ -505,6 +748,13 @@ async fn create_timeline(
     .map_err(|e| e.to_string())?;
 
     let id = conn.last_insert_rowid();
+
+    // Automatically create a default track for new timelines
+    conn.execute(
+        "INSERT INTO timeline_tracks (timeline_id, name, order_index) VALUES (?1, 'Track 1', 0)",
+        [&id.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(Timeline {
         id,
@@ -784,10 +1034,268 @@ async fn delete_timeline_element(app_handle: AppHandle, id: i64) -> Result<(), S
 }
 
 #[tauri::command]
+async fn create_audio_channel(
+    app_handle: AppHandle,
+    sound_set_id: i64,
+    name: String,
+    icon: String,
+    volume: f64,
+) -> Result<AudioChannel, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 FROM audio_channels WHERE sound_set_id = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let order_index: i64 = stmt
+        .query_row([&sound_set_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO audio_channels (sound_set_id, name, icon, volume, order_index) VALUES (?1, ?2, ?3, ?4, ?5)",
+        (&sound_set_id, &name, &icon, &volume, &order_index),
+    ).map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(AudioChannel {
+        id,
+        sound_set_id,
+        name,
+        icon,
+        volume,
+        order_index,
+        created_at: chrono::Local::now().to_rfc3339(),
+    })
+}
+
+#[tauri::command]
+async fn get_audio_channels(
+    app_handle: AppHandle,
+    sound_set_id: i64,
+) -> Result<Vec<AudioChannel>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, sound_set_id, name, icon, volume, order_index, created_at FROM audio_channels WHERE sound_set_id = ?1 ORDER BY order_index ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let channels = stmt
+        .query_map([sound_set_id], |row| {
+            Ok(AudioChannel {
+                id: row.get(0)?,
+                sound_set_id: row.get(1)?,
+                name: row.get(2)?,
+                icon: row.get(3)?,
+                volume: row.get(4)?,
+                order_index: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<Vec<_>, _> = channels.collect();
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_audio_channel(
+    app_handle: AppHandle,
+    id: i64,
+    name: String,
+    icon: String,
+    volume: f64,
+) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE audio_channels SET name = ?1, icon = ?2, volume = ?3 WHERE id = ?4",
+        rusqlite::params![name, icon, volume, id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_audio_channel(app_handle: AppHandle, id: i64) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute("DELETE FROM audio_channels WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn reorder_audio_channels(
+    app_handle: AppHandle,
+    id: i64,
+    order_index: i64,
+) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE audio_channels SET order_index = ?1 WHERE id = ?2",
+        rusqlite::params![order_index, id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn seed_default_channels(
+    app_handle: AppHandle,
+    sound_set_id: i64,
+) -> Result<Vec<AudioChannel>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT count(*) FROM audio_channels WHERE sound_set_id = ?1")
+        .map_err(|e| e.to_string())?;
+    let count: i64 = stmt
+        .query_row([&sound_set_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    if count == 0 {
+        let defaults = [
+            ("Music", "music", 1.0, 0),
+            ("Ambient", "ambient", 1.0, 1),
+            ("Sound Effects", "sfx", 1.0, 2),
+        ];
+
+        for (name, icon, volume, order) in defaults.iter() {
+            conn.execute(
+                "INSERT INTO audio_channels (sound_set_id, name, icon, volume, order_index) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (&sound_set_id, name, icon, volume, order),
+            ).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT id, sound_set_id, name, icon, volume, order_index, created_at FROM audio_channels WHERE sound_set_id = ?1 ORDER BY order_index ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let channels = stmt
+        .query_map([sound_set_id], |row| {
+            Ok(AudioChannel {
+                id: row.get(0)?,
+                sound_set_id: row.get(1)?,
+                name: row.get(2)?,
+                icon: row.get(3)?,
+                volume: row.get(4)?,
+                order_index: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<Vec<_>, _> = channels.collect();
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn init_db_command(app_handle: AppHandle) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     init_database(&conn).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn create_global_oneshot(
+    app_handle: AppHandle,
+    file_path: String,
+    file_name: String,
+    channel_type: String,
+) -> Result<AudioElement, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let settings = get_app_settings(app_handle.clone()).await?;
+    let mut final_file_path = file_path.clone();
+
+    if settings.audio_file_strategy == "copy" {
+        let library_dir = if settings.library_path.trim().is_empty() {
+            get_default_library_path(&app_handle)
+        } else {
+            PathBuf::from(&settings.library_path)
+        };
+        if !library_dir.exists() {
+            fs::create_dir_all(&library_dir).map_err(|e| e.to_string())?;
+        }
+
+        let destination = library_dir.join(&file_name);
+        fs::copy(&file_path, &destination).map_err(|e| e.to_string())?;
+        final_file_path = destination.to_string_lossy().to_string();
+    }
+
+    conn.execute(
+        "INSERT INTO audio_elements (sound_set_id, file_path, file_name, channel_type, channel_id) VALUES (NULL, ?1, ?2, ?3, NULL)",
+        (&final_file_path, &file_name, &channel_type),
+    ).map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(AudioElement {
+        id,
+        sound_set_id: None,
+        channel_id: None,
+        file_path: final_file_path,
+        file_name,
+        channel_type,
+        volume_db: 0.0,
+        created_at: chrono::Local::now().to_rfc3339(),
+    })
+}
+
+#[tauri::command]
+async fn get_global_oneshots(app_handle: AppHandle) -> Result<Vec<AudioElement>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, sound_set_id, file_path, file_name, channel_type, volume_db, created_at, channel_id FROM audio_elements WHERE sound_set_id IS NULL ORDER BY created_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let elements = stmt
+        .query_map([], |row| {
+            Ok(AudioElement {
+                id: row.get(0)?,
+                sound_set_id: row.get(1)?,
+                file_path: row.get(2)?,
+                file_name: row.get(3)?,
+                channel_type: row.get(4)?,
+                volume_db: row.get(5)?,
+                created_at: row.get(6)?,
+                channel_id: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<Vec<_>, _> = elements.collect();
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_global_oneshot(app_handle: AppHandle, id: i64) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "DELETE FROM audio_elements WHERE id = ?1 AND sound_set_id IS NULL",
+        [id],
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
@@ -800,15 +1308,28 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             init_db_command,
+            get_app_settings,
+            update_app_settings,
+            create_audio_channel,
+            get_audio_channels,
+            update_audio_channel,
+            delete_audio_channel,
+            reorder_audio_channels,
+            seed_default_channels,
             create_sound_set,
             get_sound_sets,
             delete_sound_set,
             create_mood,
             get_moods,
+            delete_mood,
             create_audio_element,
             get_audio_elements,
             delete_audio_element,
+            create_global_oneshot,
+            get_global_oneshots,
+            delete_global_oneshot,
             update_audio_element_channel,
+            update_audio_element_channel_id,
             create_timeline,
             get_timelines,
             delete_timeline,
@@ -821,6 +1342,8 @@ pub fn run() {
             get_track_elements,
             update_element_time_and_duration,
             delete_timeline_element,
+            export_sound_set,
+            import_sound_set,
         ])
         .setup(|app| {
             let app_handle = app.handle();

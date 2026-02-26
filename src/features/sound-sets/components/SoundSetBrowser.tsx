@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Music, Plus } from 'lucide-react';
+import { Music, Plus, Trash2, Download } from 'lucide-react';
 
 import { MoodCreateSection } from './MoodCreateSection';
 import { SoundSetCreateSection } from './SoundSetCreateSection';
@@ -34,7 +35,10 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
     createSoundSet,
     deleteSoundSet,
     createMood,
+    deleteMood,
     loadMoods,
+    importSoundSet,
+    exportSoundSet,
   } = useSoundSetStore();
 
   const { success, error } = useToast();
@@ -77,11 +81,61 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
   };
 
   const handleDeleteSoundSet = async (id: number, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete SoundSet "${name}"?`)) {
+      return;
+    }
+
     try {
       await deleteSoundSet(id);
       success(`SoundSet "${name}" deleted`);
     } catch {
       error('Failed to delete SoundSet');
+    }
+  };
+
+  const handleDeleteMood = async (event: React.MouseEvent, id: number, name: string) => {
+    event.stopPropagation();
+    if (!window.confirm(`Are you sure you want to delete Mood "${name}"?`)) {
+      return;
+    }
+
+    try {
+      await deleteMood(id);
+      success(`Mood "${name}" deleted`);
+    } catch {
+      error('Failed to delete Mood');
+    }
+  };
+
+  const handleImport = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'Immersive Archive', extensions: ['zip', 'immersive'] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+
+      success('Importing SoundSet...');
+      await importSoundSet(selected);
+      success('SoundSet imported successfully!');
+    } catch (err) {
+      error(`Failed to import SoundSet: ${String(err)}`);
+    }
+  };
+
+  const handleExport = async (id: number, name: string) => {
+    try {
+      const selected = await save({
+        defaultPath: `${name}-export.zip`,
+        filters: [{ name: 'Immersive Archive', extensions: ['zip', 'immersive'] }],
+      });
+      if (!selected) return;
+
+      success('Exporting SoundSet...');
+      await exportSoundSet(id, selected);
+      success('SoundSet exported successfully!');
+    } catch (err) {
+      error(`Failed to export SoundSet: ${String(err)}`);
     }
   };
 
@@ -127,6 +181,13 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
         <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.2em]">
           SoundSets
         </h2>
+        <button
+          onClick={() => void handleImport()}
+          className="text-gray-500 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50 rounded p-1"
+          title="Import SoundSet"
+        >
+          <Download className="w-3.5 h-3.5" />
+        </button>
       </Cluster>
 
       <div className="flex-1 overflow-hidden flex flex-col">
@@ -158,6 +219,7 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
                 isSelected={selectedSoundSet?.id === soundSet.id}
                 onSelect={() => selectSoundSet(soundSet)}
                 onDelete={() => void handleDeleteSoundSet(soundSet.id, soundSet.name)}
+                onExport={() => void handleExport(soundSet.id, soundSet.name)}
               />
             ))}
           </Stack>
@@ -197,15 +259,33 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
                 {moods.map(mood => (
                   <div
                     key={mood.id}
-                    onClick={() => selectMood(mood)}
                     className={cn(
-                      'px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest cursor-pointer transition-all border',
+                      'group px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-widest transition-all border flex items-center justify-between',
                       selectedMood?.id === mood.id
                         ? 'bg-cyan-500 text-black shadow-[0_0_20px_rgba(0,212,255,0.4)] border-transparent'
                         : 'text-gray-500 hover:bg-white/[0.03] border-transparent'
                     )}
                   >
-                    {mood.name}
+                    <span className="cursor-pointer flex-1" onClick={() => selectMood(mood)}>
+                      {mood.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void handleDeleteMood(e, mood.id, mood.name);
+                      }}
+                      className={cn(
+                        'opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-cyan-500/50 cursor-pointer',
+                        selectedMood?.id === mood.id
+                          ? 'hover:bg-black/20 text-black/70 hover:text-black'
+                          : 'hover:bg-white/10 text-gray-500 hover:text-red-400'
+                      )}
+                      title="Delete mood"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 ))}
               </Stack>

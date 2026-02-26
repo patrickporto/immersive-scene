@@ -1,12 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { motion } from 'framer-motion';
+import { Settings } from 'lucide-react';
 
 import { AudioUploader } from './features/audio-engine/components/AudioUploader';
 import { TimelineEditor } from './features/audio-engine/components/TimelineEditor';
 import { useAudioEngineStore } from './features/audio-engine/stores/audioEngineStore';
 import { BottomPlayer } from './features/mixer/components/BottomPlayer';
+import ChannelSidebar from './features/mixer/components/ChannelSidebar';
+import { SettingsModal } from './features/settings/components/SettingsModal';
 import { SoundSetBrowser } from './features/sound-sets/components/SoundSetBrowser';
 import { useSoundSetStore } from './features/sound-sets/stores/soundSetStore';
 import { useTimelineStore } from './features/sound-sets/stores/timelineStore';
@@ -17,6 +20,8 @@ export default function App() {
     useSoundSetStore();
   const { initAudioContext } = useAudioEngineStore();
   const { success, error: toastError } = useToast();
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const handleDragEnd = (result: DropResult) => {
     const { destination, draggableId } = result;
@@ -56,7 +61,7 @@ export default function App() {
         return;
       }
 
-      const dropX = (window as any).__lastDragX;
+      const dropX = (window as unknown as { __lastDragX?: number }).__lastDragX;
       let startTimeMs = 0;
 
       if (typeof dropX === 'number') {
@@ -141,8 +146,17 @@ export default function App() {
   return (
     <div className="flex h-screen w-full bg-[#0a0a0f] text-slate-100 font-sans overflow-hidden selection:bg-cyan-500/30">
       {/* Sidebar */}
-      <div className="w-80 flex-shrink-0 border-r border-white/5 bg-[#0f0f15] shadow-2xl z-10 hidden md:block">
+      <div className="w-80 flex-shrink-0 border-r border-white/5 bg-[#0f0f15] shadow-2xl z-10 hidden md:flex md:flex-col">
         <SoundSetBrowser />
+        <div className="p-4 border-t border-white/5 mt-auto">
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-foreground/70 hover:text-foreground hover:bg-white/5 rounded-md transition-colors"
+          >
+            <Settings size={16} />
+            <span>App Settings</span>
+          </button>
+        </div>
       </div>
 
       {/* Primary Area */}
@@ -175,6 +189,13 @@ export default function App() {
           </div>
         </main>
       </DragDropContext>
+
+      {/* Right Sidebar */}
+      <div className="z-10 hidden xl:block shadow-[-10px_0_30px_rgba(0,0,0,0.5)] bg-[#0f0f15]">
+        <ChannelSidebar />
+      </div>
+
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
       {/* Embedded Styles for custom-scrollbar */}
       <style

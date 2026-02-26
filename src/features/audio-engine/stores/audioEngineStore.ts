@@ -2,10 +2,11 @@ import { create } from 'zustand';
 
 export interface AudioElement {
   id: number;
-  sound_set_id: number;
+  sound_set_id: number | null;
+  channel_id: number | null;
   file_path: string;
   file_name: string;
-  channel_type: 'music' | 'ambient' | 'effects' | 'creatures' | 'voice';
+  channel_type: string;
   volume_db: number;
   created_at: string;
 }
@@ -29,6 +30,8 @@ export interface PlaybackContext {
 
 interface AudioEngineState {
   audioContext: AudioContext | null;
+  globalGainNode: GainNode | null;
+  channelNodes: Map<number, GainNode>;
   sources: Map<number, AudioSource>;
   isInitialized: boolean;
   globalVolume: number;
@@ -43,6 +46,7 @@ interface AudioEngineState {
   stopAll: () => void;
   toggleLoop: (elementId: number) => void;
   setVolume: (elementId: number, volume: number) => void;
+  setChannelVolume: (channelId: number, volume: number) => void;
   setGlobalVolume: (volume: number) => void;
   setSelectedElementId: (id: number | null) => void;
   removeSource: (elementId: number) => void;
@@ -73,6 +77,8 @@ interface AudioEngineState {
 
 export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   audioContext: null,
+  globalGainNode: null,
+  channelNodes: new Map(),
   sources: new Map(),
   isInitialized: false,
   globalVolume: 1.0,
@@ -99,6 +105,10 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     if (audioContext.state === 'suspended') {
       await audioContext.resume();
     }
+
+    const globalGainNode = audioContext.createGain();
+    globalGainNode.connect(audioContext.destination);
+    globalGainNode.gain.value = get().globalVolume;
 
     const stateSyncInterval = window.setInterval(() => {
       const { sources, audioContext: ctx } = get();
@@ -130,18 +140,31 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       }
     }, 50);
 
-    set({ audioContext, isInitialized: true, stateSyncInterval });
+    set({ audioContext, isInitialized: true, stateSyncInterval, globalGainNode });
   },
 
   loadAudioFile: async (element, fileData) => {
-    const { audioContext, sources } = get();
-    if (!audioContext) return;
+    const { audioContext, sources, channelNodes, globalGainNode } = get();
+    if (!audioContext || !globalGainNode) return;
 
     try {
       const audioBuffer = await audioContext.decodeAudioData(fileData);
 
       const gainNode = audioContext.createGain();
-      gainNode.connect(audioContext.destination);
+
+      let targetNode: GainNode = globalGainNode;
+      if (element.channel_id) {
+        let channelNode = channelNodes.get(element.channel_id);
+        if (!channelNode) {
+          channelNode = audioContext.createGain();
+          channelNode.connect(globalGainNode);
+          channelNodes.set(element.channel_id, channelNode);
+          set({ channelNodes: new Map(channelNodes) });
+        }
+        targetNode = channelNode;
+      }
+
+      gainNode.connect(targetNode);
       gainNode.gain.value = 0.8;
 
       const source: AudioSource = {
@@ -317,12 +340,24 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
 
   setGlobalVolume: volume => {
     set({ globalVolume: volume });
-    const { sources } = get();
-    sources.forEach(source => {
-      if (source.gainNode) {
-        source.gainNode.gain.value = volume;
-      }
-    });
+    const { globalGainNode } = get();
+    if (globalGainNode) {
+      globalGainNode.gain.value = volume;
+    }
+  },
+
+  setChannelVolume: (channelId, volume) => {
+    const { channelNodes, audioContext, globalGainNode } = get();
+    if (!audioContext || !globalGainNode) return;
+
+    let channelNode = channelNodes.get(channelId);
+    if (!channelNode) {
+      channelNode = audioContext.createGain();
+      channelNode.connect(globalGainNode);
+      channelNodes.set(channelId, channelNode);
+      set({ channelNodes: new Map(channelNodes) });
+    }
+    channelNode.gain.value = volume;
   },
 
   removeSource: elementId => {
@@ -340,7 +375,8 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   cleanup: () => {
-    const { audioContext, sources, activeTimelineLoopTimeout } = get();
+    const { audioContext, sources, activeTimelineLoopTimeout, globalGainNode, channelNodes } =
+      get();
 
     if (activeTimelineLoopTimeout !== null) {
       clearTimeout(activeTimelineLoopTimeout);
@@ -365,6 +401,9 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       source.gainNode?.disconnect();
     });
 
+    channelNodes.forEach(node => node.disconnect());
+    globalGainNode?.disconnect();
+
     const { stateSyncInterval } = get();
     if (stateSyncInterval !== null) {
       clearInterval(stateSyncInterval);
@@ -373,6 +412,8 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     audioContext?.close();
     set({
       audioContext: null,
+      globalGainNode: null,
+      channelNodes: new Map(),
       sources: new Map(),
       isInitialized: false,
       stateSyncInterval: null,

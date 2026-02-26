@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Upload } from 'lucide-react';
 
 import { Cluster } from '../../../shared/components/layout/Cluster';
 import { cn } from '../../../shared/utils/cn';
@@ -10,6 +10,7 @@ interface SoundSetListItemProps {
   isSelected: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  onExport: () => void;
 }
 
 /**
@@ -23,6 +24,7 @@ export function SoundSetListItem({
   isSelected,
   onSelect,
   onDelete,
+  onExport,
 }: SoundSetListItemProps) {
   return (
     <motion.div
@@ -38,13 +40,22 @@ export function SoundSetListItem({
     >
       <Cluster className="px-4 py-3" justify="between" align="center">
         <span className="text-sm font-bold truncate tracking-tight">{name}</span>
-        <Trash2
-          className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all flex-shrink-0"
-          onClick={event => {
-            event.stopPropagation();
-            onDelete();
-          }}
-        />
+        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 flex-shrink-0 transition-all">
+          <Upload
+            className="w-3.5 h-3.5 hover:text-cyan-400 transition-colors"
+            onClick={event => {
+              event.stopPropagation();
+              onExport();
+            }}
+          />
+          <Trash2
+            className="w-3.5 h-3.5 hover:text-red-500 transition-colors"
+            onClick={event => {
+              event.stopPropagation();
+              onDelete();
+            }}
+          />
+        </div>
       </Cluster>
 
       {isSelected && (
