@@ -7,6 +7,7 @@ import { DiscordSettingsSection } from './DiscordSettingsSection';
 import { Modal } from '../../../shared/components/Modal';
 import { useAudioDevices } from '../../audio-engine/hooks/useAudioDevices';
 import { useAudioEngineStore } from '../../audio-engine/stores/audioEngineStore';
+import { useAppVersionAndUpdates } from '../hooks/useAppVersionAndUpdates';
 import { useSettingsStore } from '../stores/settingsStore';
 
 interface SettingsModalProps {
@@ -23,6 +24,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [localOutputDeviceId, setLocalOutputDeviceId] = useState(settings.output_device_id);
 
   const { devices } = useAudioDevices();
+  const {
+    currentVersion,
+    latestVersion,
+    status: updateStatus,
+    isChecking,
+    message: updateMessage,
+    checkForUpdates,
+  } = useAppVersionAndUpdates();
 
   useEffect(() => {
     if (isOpen) {
@@ -158,7 +167,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
         {/* Library Path Selection - Only explicitly required if 'copy' is selected but always good to show */}
         <div
-          className={`flex flex - col gap - 2 transition - opacity duration - 300 ${localStrategy === 'copy' ? 'opacity-100' : 'opacity-50'} `}
+          className={`flex flex-col gap-2 transition-opacity duration-300 ${
+            localStrategy === 'copy' ? 'opacity-100' : 'opacity-50'
+          }`}
         >
           <h3 className="text-sm font-medium text-foreground/80">Library Folder Path</h3>
           <div className="flex gap-2">
@@ -181,6 +192,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               Please select a folder to use the &apos;Copy to Library&apos; strategy.
             </span>
           )}
+        </div>
+
+        <div className="flex flex-col gap-3 p-3 rounded-lg border border-border bg-card/50">
+          <h3 className="text-sm font-medium text-foreground/80">Version and Updates</h3>
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-sm text-foreground">Current version: {currentVersion}</span>
+              {latestVersion && (
+                <span className="text-xs text-muted-foreground">
+                  Latest release: {latestVersion}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                void checkForUpdates();
+              }}
+              className="px-3 py-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 rounded-md transition-colors text-sm"
+              disabled={isChecking}
+            >
+              {isChecking ? 'Checking...' : 'Check updates'}
+            </button>
+          </div>
+          <span
+            className={`text-xs ${
+              updateStatus === 'error'
+                ? 'text-red-500'
+                : updateStatus === 'update-available'
+                  ? 'text-amber-500'
+                  : 'text-muted-foreground'
+            }`}
+          >
+            {updateMessage}
+          </span>
         </div>
       </div>
 

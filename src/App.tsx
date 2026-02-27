@@ -25,12 +25,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const handleDragEnd = (result: DropResult) => {
-    const { destination, draggableId } = result;
-
-    if (!destination) {
-      toastError(`Drop failed: no destination (dragged ${draggableId})`);
-      return;
-    }
+    const { destination, draggableId, combine } = result;
 
     const isGroupDrag = draggableId.startsWith('group-');
     const isMemberDrag = draggableId.startsWith('member-');
@@ -59,12 +54,42 @@ export default function App() {
       if (isNaN(elementId)) return;
     }
 
+    if (!destination && !combine) {
+      if (isMemberDrag && memberId !== null && sourceGroupId !== null) {
+        useElementGroupStore
+          .getState()
+          .removeElementFromGroup(memberId, sourceGroupId)
+          .then(() => success('Removido do grupo'))
+          .catch(err => toastError('Erro ao remover: ' + String(err)));
+      }
+      return;
+    }
+
+    if (combine) {
+      const targetGroupMatch = combine.draggableId.match(/^group-(\d+)$/);
+      if (targetGroupMatch) {
+        if (elementId !== null && !isGroupDrag) {
+          const groupId = Number(targetGroupMatch[1]);
+          const { addElementToGroup } = useElementGroupStore.getState();
+          addElementToGroup(groupId, elementId)
+            .then(() => success('Adicionado ao grupo'))
+            .catch(err => toastError('Erro ao adicionar: ' + String(err)));
+        } else {
+          toastError('Apenas áudios soltos podem ser inseridos no grupo.');
+        }
+      }
+      return;
+    }
+
+    // Narrow down that destination is valid
+    if (!destination) return;
+
     if (destination.droppableId === 'mixing-elements') {
       if (isMemberDrag && memberId !== null && sourceGroupId !== null) {
         useElementGroupStore
           .getState()
           .removeElementFromGroup(memberId, sourceGroupId)
-          .then(() => success('Movido para Mixed Elements'))
+          .then(() => success('Removido do grupo'))
           .catch(err => toastError('Erro ao remover: ' + String(err)));
       }
       return;
@@ -81,12 +106,12 @@ export default function App() {
 
     const groupMatch = destination.droppableId.match(/^group-(\d+)$/);
     if (groupMatch) {
-      if (elementId !== null) {
+      if (elementId !== null && !isGroupDrag) {
         const groupId = Number(groupMatch[1]);
         const { addElementToGroup } = useElementGroupStore.getState();
 
         addElementToGroup(groupId, elementId)
-          .then(() => success(`Element added to group ${groupId}`))
+          .then(() => success('Adicionado ao grupo'))
           .catch(err => toastError('Failed to add element: ' + String(err)));
       } else {
         toastError('Cannot add a group inside another group.');

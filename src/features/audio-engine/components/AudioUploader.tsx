@@ -102,7 +102,12 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
           </h4>
         </div>
 
-        <Droppable droppableId="mixing-elements" direction="horizontal" isDropDisabled={false}>
+        <Droppable
+          droppableId="mixing-elements"
+          direction="horizontal"
+          isDropDisabled={false}
+          isCombineEnabled={true}
+        >
           {provided => (
             <div
               className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3"

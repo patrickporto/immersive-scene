@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import { useDiscordConnection } from '../hooks/useDiscordConnection';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -20,26 +20,6 @@ export function DiscordSettingsSection() {
     loadChannels,
     clearError,
   } = useDiscordConnection();
-
-  useEffect(() => {
-    setToken(settings.discord_bot_token);
-    setGuildId(settings.discord_guild_id);
-    setChannelId(settings.discord_channel_id);
-
-    if (settings.discord_bot_token) {
-      validateToken(settings.discord_bot_token).then(success => {
-        if (success && settings.discord_guild_id) {
-          loadChannels(settings.discord_bot_token, settings.discord_guild_id);
-        }
-      });
-    }
-  }, [
-    settings.discord_bot_token,
-    settings.discord_guild_id,
-    settings.discord_channel_id,
-    validateToken,
-    loadChannels,
-  ]);
 
   const handleValidate = async () => {
     const success = await validateToken(token);

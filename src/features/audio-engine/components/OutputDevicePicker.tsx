@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { Box, Check, MonitorSpeaker, Speaker } from 'lucide-react';
@@ -16,8 +16,7 @@ export function OutputDevicePicker() {
   const { settings, updateSettings } = useSettingsStore();
 
   const selectedDeviceId = settings.output_device_id || '';
-  // Temporary: we'll add discord config fields later
-  const hasDiscordConfig = !!(settings as any).discord_bot_token;
+  const hasDiscordConfig = settings.discord_bot_token.trim().length > 0;
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {

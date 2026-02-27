@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=immersive-scene
+Exec=immersive-scene
+Icon=com.patrickporto.immersive-scene
+Categories=Audio;Utility;
+Terminal=false

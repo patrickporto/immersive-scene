@@ -1,0 +1,27 @@
+app-id: com.patrickporto.immersive-scene
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: immersive-scene
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+modules:
+  - name: immersive-scene
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 immersive-scene /app/bin/immersive-scene
+      - install -Dm644 com.patrickporto.immersive-scene.desktop /app/share/applications/com.patrickporto.immersive-scene.desktop
+      - install -Dm644 com.patrickporto.immersive-scene.metainfo.xml /app/share/metainfo/com.patrickporto.immersive-scene.metainfo.xml
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/com.patrickporto.immersive-scene.png
+    sources:
+      - type: file
+        path: src-tauri/target/release/immersive-scene
+        dest-filename: immersive-scene
+      - type: file
+        path: packaging/flatpak/com.patrickporto.immersive-scene.desktop
+      - type: file
+        path: packaging/flatpak/com.patrickporto.immersive-scene.metainfo.xml

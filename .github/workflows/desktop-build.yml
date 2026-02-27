@@ -1,0 +1,100 @@
+name: Desktop Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-tauri:
+    name: Build ${{ matrix.os-name }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.allow-failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os-name: Linux AppImage
+            runner: ubuntu-latest
+            bundle: appimage
+            artifact-name: linux-appimage
+            artifact-path: src-tauri/target/release/bundle/appimage/*
+            allow-failure: false
+          - os-name: Windows
+            runner: windows-latest
+            bundle: nsis
+            artifact-name: windows-installer
+            artifact-path: src-tauri/target/release/bundle/nsis/*
+            allow-failure: false
+          - os-name: macOS
+            runner: macos-latest
+            bundle: dmg
+            artifact-name: macos-dmg
+            artifact-path: src-tauri/target/release/bundle/dmg/*
+            allow-failure: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --bundles ${{ matrix.bundle }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.artifact-path }}
+          if-no-files-found: error
+
+      - name: Generate checksums (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd src-tauri/target/release/bundle
+          shasum -a 256 $(find . -type f) > checksums-${{ matrix.artifact-name }}.txt
+
+      - name: Generate checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path src-tauri/target/release/bundle -File -Recurse |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), $_.Path } |
+            Set-Content -Path "src-tauri/target/release/bundle/checksums-${{ matrix.artifact-name }}.txt"
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ matrix.artifact-name }}
+          path: src-tauri/target/release/bundle/checksums-${{ matrix.artifact-name }}.txt
+          if-no-files-found: error

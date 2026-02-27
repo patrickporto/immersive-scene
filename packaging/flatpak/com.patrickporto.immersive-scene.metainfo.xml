@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.patrickporto.immersive-scene</id>
+  <name>immersive-scene</name>
+  <summary>Desktop ambient audio scene tool</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Proprietary</project_license>
+  <description>
+    <p>Build of immersive-scene for Linux desktop distribution.</p>
+  </description>
+  <launchable type="desktop-id">com.patrickporto.immersive-scene.desktop</launchable>
+</component>
