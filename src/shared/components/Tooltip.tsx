@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 
 interface TooltipProps {
   children: React.ReactNode;
-  content: string;
+  content: React.ReactNode;
   position?: 'top' | 'bottom' | 'left' | 'right';
   delay?: number;
   className?: string;

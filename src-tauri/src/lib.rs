@@ -133,14 +133,32 @@ pub struct TimelineTrack {
     pub timeline_id: i64,
     pub name: String,
     pub order_index: i64,
+    pub is_looping: bool,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ElementGroup {
+    pub id: i64,
+    pub name: String,
+    pub sound_set_id: Option<i64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ElementGroupMember {
+    pub id: i64,
+    pub group_id: i64,
+    pub audio_element_id: i64,
+    pub order_index: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TimelineElement {
     pub id: i64,
     pub track_id: i64,
-    pub audio_element_id: i64,
+    pub audio_element_id: Option<i64>,
+    pub element_group_id: Option<i64>,
     pub start_time_ms: i64,
     pub duration_ms: i64,
 }
@@ -223,8 +241,32 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             timeline_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             order_index INTEGER DEFAULT 0,
+            is_looping INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS element_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            sound_set_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (sound_set_id) REFERENCES sound_sets(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS element_group_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            audio_element_id INTEGER NOT NULL,
+            order_index INTEGER DEFAULT 0,
+            FOREIGN KEY (group_id) REFERENCES element_groups(id) ON DELETE CASCADE,
+            FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -234,12 +276,14 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timeline_id INTEGER,
             track_id INTEGER,
-            audio_element_id INTEGER NOT NULL,
+            audio_element_id INTEGER,
+            element_group_id INTEGER,
             start_time_ms INTEGER DEFAULT 0,
             duration_ms INTEGER DEFAULT 0,
             FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE,
             FOREIGN KEY (track_id) REFERENCES timeline_tracks(id) ON DELETE CASCADE,
-            FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE
+            FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE,
+            FOREIGN KEY (element_group_id) REFERENCES element_groups(id) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -285,6 +329,22 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
         )?;
     }
 
+    // Timeline tracks migration for is_looping
+    let mut stmt = conn.prepare("PRAGMA table_info(timeline_tracks)")?;
+    let track_has_is_looping = stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "is_looping")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if !track_has_is_looping {
+        conn.execute(
+            "ALTER TABLE timeline_tracks ADD COLUMN is_looping INTEGER DEFAULT 0",
+            [],
+        )?;
+    }
+
     // Audio channels migration
     let mut stmt = conn.prepare("PRAGMA table_info(audio_elements)")?;
     let has_channel_id = stmt
@@ -319,7 +379,7 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
         )?;
     }
 
-    // Timeline elements migration for tracks and duration
+    // Timeline elements migration for tracks and duration + element groups
     let mut stmt = conn.prepare("PRAGMA table_info(timeline_elements)")?;
     let has_track_id = stmt
         .query_map([], |row| {
@@ -328,18 +388,58 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
         })?
         .any(|r| r.unwrap_or(false));
 
-    if !has_track_id {
+    let mut stmt_eg = conn.prepare("PRAGMA table_info(timeline_elements)")?;
+    let has_element_group_id = stmt_eg
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "element_group_id")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if !has_track_id || !has_element_group_id {
+        conn.execute("PRAGMA foreign_keys=off;", [])?;
         conn.execute(
-            "ALTER TABLE timeline_elements ADD COLUMN track_id INTEGER",
-            [],
-        )?;
-        conn.execute(
-            "ALTER TABLE timeline_elements ADD COLUMN duration_ms INTEGER DEFAULT 0",
+            "CREATE TABLE IF NOT EXISTS timeline_elements_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timeline_id INTEGER,
+                track_id INTEGER,
+                audio_element_id INTEGER,
+                element_group_id INTEGER,
+                start_time_ms INTEGER DEFAULT 0,
+                duration_ms INTEGER DEFAULT 0,
+                FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE,
+                FOREIGN KEY (track_id) REFERENCES timeline_tracks(id) ON DELETE CASCADE,
+                FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE,
+                FOREIGN KEY (element_group_id) REFERENCES element_groups(id) ON DELETE CASCADE
+            )",
             [],
         )?;
 
-        conn.execute("INSERT INTO timeline_tracks (timeline_id, name, order_index) SELECT id, 'Master Track', 0 FROM timelines", [])?;
-        conn.execute("UPDATE timeline_elements SET track_id = (SELECT id FROM timeline_tracks WHERE timeline_tracks.timeline_id = timeline_elements.timeline_id)", [])?;
+        // Assume columns match original except potentially missing track_id, duration_ms, element_group_id
+        if !has_track_id {
+            // Need to create default master track and copy over
+            conn.execute("INSERT INTO timeline_tracks (timeline_id, name, order_index) SELECT id, 'Master Track', 0 FROM timelines", [])?;
+            conn.execute(
+                "INSERT INTO timeline_elements_new (id, timeline_id, track_id, audio_element_id, start_time_ms, duration_ms)
+                 SELECT e.id, e.timeline_id, t.id, e.audio_element_id, COALESCE(e.start_time_ms, 0), 0 
+                 FROM timeline_elements e 
+                 LEFT JOIN timeline_tracks t ON t.timeline_id = e.timeline_id",
+                [],
+            )?;
+        } else {
+            conn.execute(
+                "INSERT INTO timeline_elements_new (id, timeline_id, track_id, audio_element_id, start_time_ms, duration_ms)
+                 SELECT id, timeline_id, track_id, audio_element_id, start_time_ms, duration_ms FROM timeline_elements",
+                [],
+            )?;
+        }
+
+        conn.execute("DROP TABLE timeline_elements", [])?;
+        conn.execute(
+            "ALTER TABLE timeline_elements_new RENAME TO timeline_elements",
+            [],
+        )?;
+        conn.execute("PRAGMA foreign_keys=on;", [])?;
     }
 
     // Timeline deduplication migration
@@ -764,7 +864,7 @@ async fn create_timeline(
 
     // Automatically create a default track for new timelines
     conn.execute(
-        "INSERT INTO timeline_tracks (timeline_id, name, order_index) VALUES (?1, 'Track 1', 0)",
+        "INSERT INTO timeline_tracks (timeline_id, name, order_index, is_looping) VALUES (?1, 'Track 1', 0, 0)",
         [&id.to_string()],
     )
     .map_err(|e| e.to_string())?;
@@ -832,6 +932,12 @@ async fn update_timeline_loop(
     )
     .map_err(|e| e.to_string())?;
 
+    conn.execute(
+        "UPDATE timeline_tracks SET is_looping = ?1 WHERE timeline_id = ?2",
+        [&loop_int.to_string(), &id.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
@@ -854,7 +960,7 @@ async fn create_timeline_track(
         .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO timeline_tracks (timeline_id, name, order_index) VALUES (?1, ?2, ?3)",
+        "INSERT INTO timeline_tracks (timeline_id, name, order_index, is_looping) VALUES (?1, ?2, ?3, 0)",
         [&timeline_id.to_string(), &name, &order_index.to_string()],
     )
     .map_err(|e| e.to_string())?;
@@ -866,6 +972,7 @@ async fn create_timeline_track(
         timeline_id,
         name,
         order_index,
+        is_looping: false,
         created_at: chrono::Local::now().to_rfc3339(),
     })
 }
@@ -879,7 +986,7 @@ async fn get_timeline_tracks(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, timeline_id, name, order_index, created_at FROM timeline_tracks WHERE timeline_id = ?1 ORDER BY order_index ASC"
+        "SELECT id, timeline_id, name, order_index, is_looping, created_at FROM timeline_tracks WHERE timeline_id = ?1 ORDER BY order_index ASC"
     ).map_err(|e| e.to_string())?;
 
     let tracks = stmt
@@ -889,13 +996,34 @@ async fn get_timeline_tracks(
                 timeline_id: row.get(1)?,
                 name: row.get(2)?,
                 order_index: row.get(3)?,
-                created_at: row.get(4)?,
+                is_looping: row.get::<_, i64>(4)? != 0,
+                created_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
 
     let result: Result<Vec<_>, _> = tracks.collect();
     result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_timeline_track_looping(
+    app_handle: AppHandle,
+    id: i64,
+    is_looping: bool,
+) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let loop_int = if is_looping { 1 } else { 0 };
+
+    conn.execute(
+        "UPDATE timeline_tracks SET is_looping = ?1 WHERE id = ?2",
+        [&loop_int.to_string(), &id.to_string()],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -931,10 +1059,15 @@ async fn update_timeline_track_order(
 async fn add_element_to_track(
     app_handle: AppHandle,
     track_id: i64,
-    audio_element_id: i64,
+    audio_element_id: Option<i64>,
+    element_group_id: Option<i64>,
     start_time_ms: i64,
     duration_ms: i64,
 ) -> Result<TimelineElement, String> {
+    if audio_element_id.is_none() && element_group_id.is_none() {
+        return Err("Must provide either audio_element_id or element_group_id".into());
+    }
+
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
@@ -951,14 +1084,15 @@ async fn add_element_to_track(
         .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO timeline_elements (timeline_id, track_id, audio_element_id, start_time_ms, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
-        [
-            &timeline_id.to_string(),
-            &track_id.to_string(),
-            &audio_element_id.to_string(),
-            &start_time_ms.to_string(),
-            &duration_ms.to_string(),
-        ],
+        "INSERT INTO timeline_elements (timeline_id, track_id, audio_element_id, element_group_id, start_time_ms, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        (
+            &timeline_id,
+            &track_id,
+            &audio_element_id,
+            &element_group_id,
+            &start_time_ms,
+            &duration_ms,
+        ),
     ).map_err(|e| e.to_string())?;
 
     let id = conn.last_insert_rowid();
@@ -967,6 +1101,7 @@ async fn add_element_to_track(
         id,
         track_id,
         audio_element_id,
+        element_group_id,
         start_time_ms,
         duration_ms,
     })
@@ -981,7 +1116,7 @@ async fn get_track_elements(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, track_id, audio_element_id, start_time_ms, duration_ms FROM timeline_elements WHERE track_id = ?1 ORDER BY start_time_ms ASC"
+        "SELECT id, track_id, audio_element_id, element_group_id, start_time_ms, duration_ms FROM timeline_elements WHERE track_id = ?1 ORDER BY start_time_ms ASC"
     ).map_err(|e| e.to_string())?;
 
     let elements = stmt
@@ -990,8 +1125,9 @@ async fn get_track_elements(
                 id: row.get(0)?,
                 track_id: row.get(1)?,
                 audio_element_id: row.get(2)?,
-                start_time_ms: row.get(3)?,
-                duration_ms: row.get(4)?,
+                element_group_id: row.get(3)?,
+                start_time_ms: row.get(4)?,
+                duration_ms: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1312,6 +1448,168 @@ async fn delete_global_oneshot(app_handle: AppHandle, id: i64) -> Result<(), Str
     Ok(())
 }
 
+#[tauri::command]
+async fn create_element_group(
+    app_handle: AppHandle,
+    name: String,
+    sound_set_id: Option<i64>,
+) -> Result<ElementGroup, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO element_groups (name, sound_set_id) VALUES (?1, ?2)",
+        (&name, &sound_set_id),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(ElementGroup {
+        id,
+        name,
+        sound_set_id,
+        created_at: chrono::Local::now().to_rfc3339(),
+    })
+}
+
+#[tauri::command]
+async fn rename_element_group(app_handle: AppHandle, id: i64, name: String) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE element_groups SET name = ?1 WHERE id = ?2",
+        (&name, &id),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_element_group(app_handle: AppHandle, id: i64) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute("DELETE FROM element_groups WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_element_groups(
+    app_handle: AppHandle,
+    sound_set_id: Option<i64>,
+) -> Result<Vec<ElementGroup>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = if sound_set_id.is_some() {
+        conn.prepare("SELECT id, name, sound_set_id, created_at FROM element_groups WHERE sound_set_id = ?1 ORDER BY created_at DESC")
+    } else {
+        conn.prepare("SELECT id, name, sound_set_id, created_at FROM element_groups WHERE sound_set_id IS NULL ORDER BY created_at DESC")
+    }.map_err(|e| e.to_string())?;
+
+    let elements = if let Some(sid) = sound_set_id {
+        stmt.query_map([sid], |row| {
+            Ok(ElementGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                sound_set_id: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+    } else {
+        stmt.query_map([], |row| {
+            Ok(ElementGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                sound_set_id: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+    };
+
+    elements.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_element_to_group(
+    app_handle: AppHandle,
+    group_id: i64,
+    audio_element_id: i64,
+) -> Result<ElementGroupMember, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT COALESCE(MAX(order_index), -1) + 1 FROM element_group_members WHERE group_id = ?1")
+        .map_err(|e| e.to_string())?;
+
+    let order_index: i64 = stmt
+        .query_row([&group_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO element_group_members (group_id, audio_element_id, order_index) VALUES (?1, ?2, ?3)",
+        (&group_id, &audio_element_id, &order_index),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(ElementGroupMember {
+        id,
+        group_id,
+        audio_element_id,
+        order_index,
+    })
+}
+
+#[tauri::command]
+async fn remove_element_from_group(app_handle: AppHandle, id: i64) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute("DELETE FROM element_group_members WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_group_members(
+    app_handle: AppHandle,
+    group_id: i64,
+) -> Result<Vec<ElementGroupMember>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, group_id, audio_element_id, order_index FROM element_group_members WHERE group_id = ?1 ORDER BY order_index ASC"
+    ).map_err(|e| e.to_string())?;
+
+    let members = stmt
+        .query_map([group_id], |row| {
+            Ok(ElementGroupMember {
+                id: row.get(0)?,
+                group_id: row.get(1)?,
+                audio_element_id: row.get(2)?,
+                order_index: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<Vec<_>, _> = members.collect();
+    result.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1349,6 +1647,7 @@ pub fn run() {
             update_timeline_loop,
             create_timeline_track,
             get_timeline_tracks,
+            update_timeline_track_looping,
             delete_timeline_track,
             update_timeline_track_order,
             add_element_to_track,
@@ -1363,6 +1662,13 @@ pub fn run() {
             discord::discord_connect,
             discord::discord_disconnect,
             discord::discord_send_audio,
+            get_group_members,
+            create_element_group,
+            rename_element_group,
+            delete_element_group,
+            get_element_groups,
+            add_element_to_group,
+            remove_element_from_group,
         ])
         .setup(|app| {
             let app_handle = app.handle();
@@ -1464,7 +1770,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO timeline_tracks (id, timeline_id, name) VALUES (5, 1, 'Trk')",
+            "INSERT INTO timeline_tracks (id, timeline_id, name, is_looping) VALUES (5, 1, 'Trk', 0)",
             [],
         )
         .unwrap();

@@ -11,6 +11,7 @@ import { BottomPlayer } from './features/mixer/components/BottomPlayer';
 import ChannelSidebar from './features/mixer/components/ChannelSidebar';
 import { SettingsModal } from './features/settings/components/SettingsModal';
 import { SoundSetBrowser } from './features/sound-sets/components/SoundSetBrowser';
+import { useElementGroupStore } from './features/sound-sets/stores/elementGroupStore';
 import { useSoundSetStore } from './features/sound-sets/stores/soundSetStore';
 import { useTimelineStore } from './features/sound-sets/stores/timelineStore';
 import { useToast } from './shared/hooks/useToast';
@@ -31,11 +32,65 @@ export default function App() {
       return;
     }
 
-    const elementId = parseInt(draggableId, 10);
-    if (isNaN(elementId)) return;
+    const isGroupDrag = draggableId.startsWith('group-');
+    const isMemberDrag = draggableId.startsWith('member-');
+
+    let elementId: number | null = null;
+    let draggedGroupId: number | null = null;
+    let memberId: number | null = null;
+    let sourceGroupId: number | null = null;
+
+    if (isGroupDrag) {
+      draggedGroupId = parseInt(draggableId.replace('group-', ''), 10);
+      if (isNaN(draggedGroupId)) return;
+    } else if (isMemberDrag) {
+      // member-{memberId}-audio-{elementId}-group-{groupId}
+      const parts = draggableId.split('-');
+      if (parts.length >= 6) {
+        memberId = parseInt(parts[1], 10);
+        elementId = parseInt(parts[3], 10);
+        sourceGroupId = parseInt(parts[5], 10);
+        if (isNaN(memberId) || isNaN(elementId) || isNaN(sourceGroupId)) return;
+      } else {
+        return;
+      }
+    } else {
+      elementId = parseInt(draggableId, 10);
+      if (isNaN(elementId)) return;
+    }
+
+    if (destination.droppableId === 'mixing-elements') {
+      if (isMemberDrag && memberId !== null && sourceGroupId !== null) {
+        useElementGroupStore
+          .getState()
+          .removeElementFromGroup(memberId, sourceGroupId)
+          .then(() => success('Movido para Mixed Elements'))
+          .catch(err => toastError('Erro ao remover: ' + String(err)));
+      }
+      return;
+    }
 
     if (destination.droppableId === 'effects-zone') {
-      useSoundSetStore.getState().updateAudioElementChannel(elementId, 'effects');
+      if (elementId !== null) {
+        useSoundSetStore.getState().updateAudioElementChannel(elementId, 'effects');
+      } else {
+        toastError('Cannot route an entire group to effects zone yet.');
+      }
+      return;
+    }
+
+    const groupMatch = destination.droppableId.match(/^group-(\d+)$/);
+    if (groupMatch) {
+      if (elementId !== null) {
+        const groupId = Number(groupMatch[1]);
+        const { addElementToGroup } = useElementGroupStore.getState();
+
+        addElementToGroup(groupId, elementId)
+          .then(() => success(`Element added to group ${groupId}`))
+          .catch(err => toastError('Failed to add element: ' + String(err)));
+      } else {
+        toastError('Cannot add a group inside another group.');
+      }
       return;
     }
 
@@ -72,11 +127,31 @@ export default function App() {
         startTimeMs = Math.round((percentage / 100) * 60000);
       }
 
-      // Estimate duration from loaded audio buffer
-      const audioSource = useAudioEngineStore.getState().sources.get(elementId);
-      const durationMs = audioSource?.buffer
-        ? Math.round(audioSource.buffer.duration * 1000)
-        : 10000;
+      // Estimate duration from loaded audio buffer (if available)
+      // For groups, use the longest duration among all group members
+      let durationMs = 10000;
+      if (elementId !== null) {
+        const audioSource = useAudioEngineStore.getState().sources.get(elementId);
+        if (audioSource?.buffer) {
+          durationMs = Math.round(audioSource.buffer.duration * 1000);
+        }
+      } else if (draggedGroupId !== null) {
+        // Get group members and find the longest duration
+        const groupMembers = useElementGroupStore.getState().groupMembers[draggedGroupId] || [];
+        const audioSources = useAudioEngineStore.getState().sources;
+
+        let maxDuration = 0;
+        groupMembers.forEach(member => {
+          const audioSource = audioSources.get(member.audio_element_id);
+          if (audioSource?.buffer) {
+            const memberDuration = Math.round(audioSource.buffer.duration * 1000);
+            maxDuration = Math.max(maxDuration, memberDuration);
+          }
+        });
+
+        // Use the longest duration found, or default to 10s if no buffers loaded yet
+        durationMs = maxDuration > 0 ? maxDuration : 10000;
+      }
 
       // Client-side overlap check
       const isOverlapping = timelineElements.some(other => {
@@ -92,15 +167,15 @@ export default function App() {
         return;
       }
 
-      addElementToTrack(targetTrackId, elementId, startTimeMs, durationMs)
+      addElementToTrack(targetTrackId, elementId, draggedGroupId, startTimeMs, durationMs)
         .then(() => {
           success(
-            `Elemento ${elementId} na trilha ${targetTrackId} (${startTimeMs}ms - duração ${durationMs}ms)`
+            `Adicionado à trilha ${targetTrackId} (${startTimeMs}ms - duração ${durationMs}ms)`
           );
         })
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
-          toastError('Falha ao adicionar elemento à timeline: ' + message);
+          toastError('Falha ao adicionar à timeline: ' + message);
         });
     } else {
       toastError(`Destino de drop inválido: ${destination.droppableId}`);

@@ -15,13 +15,15 @@ export interface TimelineTrack {
   timeline_id: number;
   name: string;
   order_index: number;
+  is_looping: boolean;
   created_at: string;
 }
 
 export interface TimelineElement {
   id: number;
   track_id: number;
-  audio_element_id: number;
+  audio_element_id: number | null;
+  element_group_id: number | null;
   start_time_ms: number;
   duration_ms: number;
 }
@@ -29,11 +31,13 @@ export interface TimelineElement {
 interface TimelineElementLike {
   id: number;
   track_id?: number;
-  audio_element_id?: number;
+  audio_element_id?: number | null;
+  element_group_id?: number | null;
   start_time_ms?: number;
   duration_ms?: number;
   trackId?: number;
-  audioElementId?: number;
+  audioElementId?: number | null;
+  elementGroupId?: number | null;
   startTimeMs?: number;
   durationMs?: number;
 }
@@ -41,7 +45,14 @@ interface TimelineElementLike {
 const normalizeTimelineElement = (element: TimelineElementLike): TimelineElement => ({
   id: Number(element.id) || 0,
   track_id: Number(element.track_id ?? element.trackId) || 0,
-  audio_element_id: Number(element.audio_element_id ?? element.audioElementId) || 0,
+  audio_element_id:
+    (element.audio_element_id ?? element.audioElementId)
+      ? Number(element.audio_element_id ?? element.audioElementId)
+      : null,
+  element_group_id:
+    (element.element_group_id ?? element.elementGroupId)
+      ? Number(element.element_group_id ?? element.elementGroupId)
+      : null,
   start_time_ms: Number(element.start_time_ms ?? element.startTimeMs) || 0,
   duration_ms: Number(element.duration_ms ?? element.durationMs) || 0,
 });
@@ -67,11 +78,13 @@ interface TimelineState {
   createTimelineTrack: (timelineId: number, name: string) => Promise<void>;
   deleteTimelineTrack: (id: number) => Promise<void>;
   updateTimelineTrackOrder: (id: number, orderIndex: number) => Promise<void>;
+  setTrackLooping: (id: number, isLooping: boolean) => Promise<void>;
 
   loadTrackElements: (trackId: number) => Promise<void>;
   addElementToTrack: (
     trackId: number,
-    audioElementId: number,
+    audioElementId: number | null,
+    elementGroupId: number | null,
     startTimeMs: number,
     durationMs: number
   ) => Promise<void>;
@@ -150,6 +163,10 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       await invoke('update_timeline_loop', { id, isLooping });
       set(state => ({
         timelines: state.timelines.map(t => (t.id === id ? { ...t, is_looping: isLooping } : t)),
+        tracks:
+          state.selectedTimelineId === id
+            ? state.tracks.map(t => ({ ...t, is_looping: isLooping }))
+            : state.tracks,
       }));
     } catch (error) {
       set({ error: String(error) });
@@ -204,6 +221,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     }
   },
 
+  setTrackLooping: async (id, isLooping) => {
+    try {
+      await invoke('update_timeline_track_looping', { id, isLooping });
+      set(state => ({
+        tracks: state.tracks.map(t => (t.id === id ? { ...t, is_looping: isLooping } : t)),
+      }));
+    } catch (error) {
+      set({ error: String(error) });
+    }
+  },
+
   loadTrackElements: async trackId => {
     set({ isLoading: true, error: null });
     try {
@@ -219,12 +247,13 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     }
   },
 
-  addElementToTrack: async (trackId, audioElementId, startTimeMs, durationMs) => {
+  addElementToTrack: async (trackId, audioElementId, elementGroupId, startTimeMs, durationMs) => {
     set({ isLoading: true, error: null });
     try {
       const rawNewElement = await invoke<TimelineElementLike>('add_element_to_track', {
         trackId,
         audioElementId,
+        elementGroupId,
         startTimeMs,
         durationMs,
       });

@@ -33,6 +33,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
     deleteTimelineTrack,
     updateElementTimeAndDuration,
     deleteTimelineElement,
+    setTrackLooping,
   } = useTimelineStore();
 
   const { audioElements } = useSoundSetStore();
@@ -196,6 +197,9 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
                           onDeleteElement={elementId => void deleteTimelineElement(elementId)}
                           onUpdateElement={(id, startTimeMs, durationMs) =>
                             void updateElementTimeAndDuration(id, startTimeMs, durationMs)
+                          }
+                          onToggleTrackLooping={(trackId, isLooping) =>
+                            void setTrackLooping(trackId, isLooping)
                           }
                         />
                       ))}

@@ -3,11 +3,11 @@ import React, { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { FolderOpen } from 'lucide-react';
 
+import { DiscordSettingsSection } from './DiscordSettingsSection';
 import { Modal } from '../../../shared/components/Modal';
 import { useAudioDevices } from '../../audio-engine/hooks/useAudioDevices';
 import { useAudioEngineStore } from '../../audio-engine/stores/audioEngineStore';
 import { useSettingsStore } from '../stores/settingsStore';
-import { DiscordSettingsSection } from './DiscordSettingsSection';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -32,7 +32,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setLocalOutputDeviceId(settings.output_device_id);
       });
     }
-  }, [isOpen, settings.audio_file_strategy, settings.library_path, settings.output_device_id, loadSettings]);
+  }, [
+    isOpen,
+    settings.audio_file_strategy,
+    settings.library_path,
+    settings.output_device_id,
+    loadSettings,
+  ]);
 
   // Sync local state when store settings change (e.g. after load)
   useEffect(() => {
@@ -100,7 +106,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 </option>
               ))}
             </select>
-            <span className="text-xs text-muted-foreground">Select where the audio should be played.</span>
+            <span className="text-xs text-muted-foreground">
+              Select where the audio should be played.
+            </span>
           </div>
         </div>
 

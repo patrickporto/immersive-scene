@@ -15,6 +15,7 @@ export function BottomPlayer() {
   const {
     selectedTimelineId,
     timelines,
+    tracks,
     elements: timelineElements,
     toggleTimelineLoop,
     isExpanded,
@@ -67,7 +68,7 @@ export function BottomPlayer() {
           selectedTimelineId
         ) {
           // Crossfade to new mood
-          crossfadeToTimeline(timelineElements, activeTimeline?.is_looping, {
+          crossfadeToTimeline(timelineElements, tracks, activeTimeline?.is_looping, {
             soundSetId: selectedSoundSet.id,
             moodId: selectedMood.id,
             timelineId: selectedTimelineId,
@@ -82,7 +83,7 @@ export function BottomPlayer() {
       if (isTimelinePaused && selectedMood?.id === activePlaybackContext?.moodId) {
         resumeTimeline();
       } else if (selectedTimelineId && selectedSoundSet && selectedMood) {
-        crossfadeToTimeline(timelineElements, activeTimeline?.is_looping, {
+        crossfadeToTimeline(timelineElements, tracks, activeTimeline?.is_looping, {
           soundSetId: selectedSoundSet.id,
           moodId: selectedMood.id,
           timelineId: selectedTimelineId,
@@ -160,10 +161,11 @@ export function BottomPlayer() {
             {selectedTimelineId && (
               <button
                 onClick={handleToggleTimelineLoop}
-                className={`absolute -right-12 p-2 rounded-full transition-colors ${activeTimeline?.is_looping
-                  ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20'
-                  : 'text-gray-500 hover:text-white hover:bg-white/5'
-                  }`}
+                className={`absolute -right-12 p-2 rounded-full transition-colors ${
+                  activeTimeline?.is_looping
+                    ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20'
+                    : 'text-gray-500 hover:text-white hover:bg-white/5'
+                }`}
                 title="Loop Timeline"
               >
                 <svg
