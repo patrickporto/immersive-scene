@@ -45,7 +45,10 @@ jobs:
         run: npm ci --legacy-peer-deps
 
       - name: Build Linux binary
-        run: npm run tauri build -- --bundles app
+        run: npm run tauri build
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: 1
 
       - name: Configure Flatpak runtime
         run: |
