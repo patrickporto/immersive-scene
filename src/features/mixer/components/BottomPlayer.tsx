@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { Activity, Settings, Volume2, VolumeX, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, Volume2, VolumeX, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { MasterControls } from './MasterControls';
 import { Cluster } from '../../../shared/components/layout/Cluster';
@@ -161,8 +161,8 @@ export function BottomPlayer() {
               <button
                 onClick={handleToggleTimelineLoop}
                 className={`absolute -right-12 p-2 rounded-full transition-colors ${activeTimeline?.is_looping
-                    ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20'
-                    : 'text-gray-500 hover:text-white hover:bg-white/5'
+                  ? 'text-cyan-400 bg-cyan-500/10 hover:bg-cyan-500/20'
+                  : 'text-gray-500 hover:text-white hover:bg-white/5'
                   }`}
                 title="Loop Timeline"
               >
@@ -219,9 +219,6 @@ export function BottomPlayer() {
               className="w-20 md:w-28 accent-cyan-500 bg-black/40 h-1.5 rounded-lg appearance-none cursor-pointer flex-shrink-0 border border-white/5"
             />
             <OutputDevicePicker />
-            <button className="p-2 hover:bg-white/5 rounded-full transition-colors hidden md:flex flex-shrink-0 text-gray-500">
-              <Settings size={16} />
-            </button>
           </Cluster>
         </Cluster>
       </div>
