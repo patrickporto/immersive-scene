@@ -45,7 +45,7 @@ describe('timelineStore', () => {
     };
     vi.mocked(invoke).mockResolvedValueOnce(mockElement);
 
-    await useTimelineStore.getState().addElementToTrack(1, 5, 1000, 5000);
+    await useTimelineStore.getState().addElementToTrack(1, 5, null, 1000, 5000);
 
     const state = useTimelineStore.getState();
     expect(state.elements).toHaveLength(1);

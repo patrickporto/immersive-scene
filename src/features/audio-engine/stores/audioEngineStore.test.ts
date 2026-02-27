@@ -11,7 +11,7 @@ describe('audioEngineStore scheduling', () => {
     useAudioEngineStore.setState({
       audioContext: { currentTime: 0, state: 'running' } as unknown as AudioContext,
       sources: new Map(),
-      activeTimelineLoopTimeout: null,
+      activeTrackTimeouts: new Map(),
       playScheduled: playScheduledMock as unknown as (
         elementId: number,
         delayMs: number,
@@ -28,11 +28,24 @@ describe('audioEngineStore scheduling', () => {
 
   it('crossfadeToTimeline schedules all elements and calculates loop timeout accurately', () => {
     const timelineElements = [
-      { audio_element_id: 1, start_time_ms: 0, duration_ms: 2000 },
-      { audio_element_id: 2, start_time_ms: 3000, duration_ms: 1500 },
+      {
+        track_id: 1,
+        audio_element_id: 1,
+        element_group_id: null,
+        start_time_ms: 0,
+        duration_ms: 2000,
+      },
+      {
+        track_id: 1,
+        audio_element_id: 2,
+        element_group_id: null,
+        start_time_ms: 3000,
+        duration_ms: 1500,
+      },
     ]; // maxEndMs should be 4500
+    const tracks = [{ id: 1, is_looping: false }];
 
-    useAudioEngineStore.getState().crossfadeToTimeline(timelineElements, true);
+    useAudioEngineStore.getState().crossfadeToTimeline(timelineElements, tracks, true);
 
     // Fast forward setTimeout(scheduleTimelineChunk, 100)
     vi.advanceTimersByTime(100);
@@ -41,9 +54,9 @@ describe('audioEngineStore scheduling', () => {
     expect(playScheduledMock).toHaveBeenCalledWith(1, 0, 2000, 2);
     expect(playScheduledMock).toHaveBeenCalledWith(2, 3000, 1500, 0);
 
-    // It should have set a timeout for the next loop at maxEndMs (4500)
+    // It should have set active track timeouts
     const state = useAudioEngineStore.getState();
-    expect(state.activeTimelineLoopTimeout).not.toBeNull();
+    expect(state.activeTrackTimeouts.size).toBeGreaterThan(0);
 
     playScheduledMock.mockClear();
 
@@ -55,10 +68,19 @@ describe('audioEngineStore scheduling', () => {
   });
 
   it('crossfadeToTimeline evaluates and sets activePlaybackContext state', () => {
-    const timelineElements = [{ audio_element_id: 1, start_time_ms: 0, duration_ms: 2000 }];
+    const timelineElements = [
+      {
+        track_id: 1,
+        audio_element_id: 1,
+        element_group_id: null,
+        start_time_ms: 0,
+        duration_ms: 2000,
+      },
+    ];
+    const tracks = [{ id: 1, is_looping: false }];
     const context = { soundSetId: 10, moodId: 20, timelineId: 30 };
 
-    useAudioEngineStore.getState().crossfadeToTimeline(timelineElements, false, context);
+    useAudioEngineStore.getState().crossfadeToTimeline(timelineElements, tracks, false, context);
 
     // Fast forward setTimeout
     vi.advanceTimersByTime(100);
