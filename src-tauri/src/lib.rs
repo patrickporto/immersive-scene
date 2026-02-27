@@ -8,6 +8,7 @@ use tauri::Manager;
 
 pub mod import_export;
 pub use import_export::*;
+pub mod discord;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SoundSet {
@@ -21,6 +22,14 @@ pub struct SoundSet {
 pub struct AppSettings {
     pub audio_file_strategy: String, // "reference" or "copy"
     pub library_path: String,
+    #[serde(default)]
+    pub output_device_id: String,
+    #[serde(default)]
+    pub discord_bot_token: String,
+    #[serde(default)]
+    pub discord_guild_id: String,
+    #[serde(default)]
+    pub discord_channel_id: String,
 }
 
 pub(crate) fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
@@ -54,6 +63,10 @@ pub(crate) fn read_app_settings(app_handle: &AppHandle) -> AppSettings {
     AppSettings {
         audio_file_strategy: "reference".to_string(),
         library_path: default_library_path,
+        output_device_id: "".to_string(),
+        discord_bot_token: "".to_string(),
+        discord_guild_id: "".to_string(),
+        discord_channel_id: "".to_string(),
     }
 }
 
@@ -1344,6 +1357,12 @@ pub fn run() {
             delete_timeline_element,
             export_sound_set,
             import_sound_set,
+            discord::discord_validate_token,
+            discord::discord_list_guilds,
+            discord::discord_list_voice_channels,
+            discord::discord_connect,
+            discord::discord_disconnect,
+            discord::discord_send_audio,
         ])
         .setup(|app| {
             let app_handle = app.handle();

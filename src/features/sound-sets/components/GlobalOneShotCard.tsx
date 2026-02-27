@@ -7,7 +7,7 @@ import { Waveform } from '../../../shared/components/Waveform';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
 import { useAudioEngineStore } from '../../audio-engine/stores/audioEngineStore';
-import { useMixerStore } from '../../mixer/stores/mixerStore';
+import { useMixerStore, ChannelType } from '../../mixer/stores/mixerStore';
 import { useGlobalOneShotStore } from '../stores/globalOneShotStore';
 import { AudioElement } from '../stores/soundSetStore';
 
@@ -26,7 +26,7 @@ export function GlobalOneShotCard({ element }: GlobalOneShotCardProps) {
   const isPlaying = source?.isPlaying || false;
   const isLooping = source?.isLooping || false;
 
-  const channelInfo = channels[element.channel_type] || {
+  const channelInfo = channels[element.channel_type as ChannelType] || {
     volume: 80,
     isMuted: false,
     isSoloed: false,
@@ -146,7 +146,9 @@ export function GlobalOneShotCard({ element }: GlobalOneShotCardProps) {
             min="0"
             max="100"
             value={channelInfo.volume}
-            onChange={event => setChannelVolume(element.channel_type, Number(event.target.value))}
+            onChange={event =>
+              setChannelVolume(element.channel_type as ChannelType, Number(event.target.value))
+            }
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
         </div>

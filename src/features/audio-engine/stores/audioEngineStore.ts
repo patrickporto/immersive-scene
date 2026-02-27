@@ -1,4 +1,7 @@
+import { invoke } from '@tauri-apps/api/core';
 import { create } from 'zustand';
+
+import { useSettingsStore } from '../../settings/stores/settingsStore';
 
 export interface AudioElement {
   id: number;
@@ -31,6 +34,7 @@ export interface PlaybackContext {
 interface AudioEngineState {
   audioContext: AudioContext | null;
   globalGainNode: GainNode | null;
+  discordDestinationNode: MediaStreamAudioDestinationNode | null;
   channelNodes: Map<number, GainNode>;
   sources: Map<number, AudioSource>;
   isInitialized: boolean;
@@ -58,6 +62,7 @@ interface AudioEngineState {
   isTimelineLoopEnabled: boolean;
   activePlaybackContext: PlaybackContext | null;
 
+  setOutputDevice: (deviceId: string) => Promise<void>;
   cleanup: () => void;
   pauseTimeline: () => Promise<void>;
   resumeTimeline: () => Promise<void>;
@@ -78,6 +83,7 @@ interface AudioEngineState {
 export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   audioContext: null,
   globalGainNode: null,
+  discordDestinationNode: null,
   channelNodes: new Map(),
   sources: new Map(),
   isInitialized: false,
@@ -106,9 +112,26 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       await audioContext.resume();
     }
 
+    const { output_device_id } = useSettingsStore.getState().settings;
+    if (output_device_id && typeof (audioContext as any).setSinkId === 'function') {
+      try {
+        await (audioContext as any).setSinkId(output_device_id);
+      } catch (e) {
+        console.warn('Could not set initial audio output device:', e);
+      }
+    }
+
     const globalGainNode = audioContext.createGain();
     globalGainNode.connect(audioContext.destination);
     globalGainNode.gain.value = get().globalVolume;
+
+    let discordDestinationNode: MediaStreamAudioDestinationNode | null = null;
+    if (typeof audioContext.createMediaStreamDestination === 'function') {
+      discordDestinationNode = audioContext.createMediaStreamDestination();
+      globalGainNode.connect(discordDestinationNode);
+      // Stub: in a real implemention, we would attach a ScriptProcessorNode or AudioWorkletNode
+      // to discordDestinationNode.stream to get PCM chunks to send over Tauri.
+    }
 
     const stateSyncInterval = window.setInterval(() => {
       const { sources, audioContext: ctx } = get();
@@ -140,7 +163,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       }
     }, 50);
 
-    set({ audioContext, isInitialized: true, stateSyncInterval, globalGainNode });
+    set({ audioContext, isInitialized: true, stateSyncInterval, globalGainNode, discordDestinationNode });
   },
 
   loadAudioFile: async (element, fileData) => {
@@ -343,6 +366,40 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     const { globalGainNode } = get();
     if (globalGainNode) {
       globalGainNode.gain.value = volume;
+    }
+  },
+
+  setOutputDevice: async deviceId => {
+    const { audioContext } = get();
+
+    const prevDeviceId = useSettingsStore.getState().settings.output_device_id;
+
+    if (deviceId === 'discord') {
+      try {
+        const { discord_bot_token, discord_guild_id, discord_channel_id } = useSettingsStore.getState().settings;
+        if (discord_bot_token && discord_guild_id && discord_channel_id) {
+          await invoke('discord_connect', {
+            token: discord_bot_token,
+            guildId: discord_guild_id,
+            channelId: discord_channel_id
+          });
+        } else {
+          console.warn('Discord not fully configured');
+        }
+      } catch (err) {
+        console.error('Failed to connect to Discord:', err);
+      }
+      return;
+    } else if (prevDeviceId === 'discord') {
+      invoke('discord_disconnect').catch(console.error);
+    }
+
+    if (audioContext && typeof (audioContext as any).setSinkId === 'function') {
+      try {
+        await (audioContext as any).setSinkId(deviceId);
+      } catch (err) {
+        console.error('Failed to set output device:', err);
+      }
     }
   },
 

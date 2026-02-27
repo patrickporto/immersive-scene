@@ -4,7 +4,10 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { FolderOpen } from 'lucide-react';
 
 import { Modal } from '../../../shared/components/Modal';
+import { useAudioDevices } from '../../audio-engine/hooks/useAudioDevices';
+import { useAudioEngineStore } from '../../audio-engine/stores/audioEngineStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { DiscordSettingsSection } from './DiscordSettingsSection';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -17,27 +20,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   const [localStrategy, setLocalStrategy] = useState(settings.audio_file_strategy);
   const [localLibraryPath, setLocalLibraryPath] = useState(settings.library_path);
+  const [localOutputDeviceId, setLocalOutputDeviceId] = useState(settings.output_device_id);
+
+  const { devices } = useAudioDevices();
 
   useEffect(() => {
     if (isOpen) {
       loadSettings().then(() => {
         setLocalStrategy(settings.audio_file_strategy);
         setLocalLibraryPath(settings.library_path);
+        setLocalOutputDeviceId(settings.output_device_id);
       });
     }
-  }, [isOpen, settings.audio_file_strategy, settings.library_path, loadSettings]);
+  }, [isOpen, settings.audio_file_strategy, settings.library_path, settings.output_device_id, loadSettings]);
 
   // Sync local state when store settings change (e.g. after load)
   useEffect(() => {
     setLocalStrategy(settings.audio_file_strategy);
     setLocalLibraryPath(settings.library_path);
+    setLocalOutputDeviceId(settings.output_device_id);
   }, [settings]);
 
   const handleSave = async () => {
     await updateSettings({
+      ...settings,
       audio_file_strategy: localStrategy,
       library_path: localLibraryPath,
+      output_device_id: localOutputDeviceId,
     });
+
+    // Apply audio output device immediately
+    useAudioEngineStore.getState().setOutputDevice(localOutputDeviceId).catch(console.error);
+
     onClose();
   };
 
@@ -68,6 +82,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </button>
           </div>
         )}
+
+        {/* Audio Output section */}
+        <div className="flex flex-col gap-3">
+          <h3 className="text-sm font-medium text-foreground/80">Audio Output Device</h3>
+          <div className="flex flex-col gap-2">
+            <select
+              title="Select Output Device"
+              value={localOutputDeviceId || ''}
+              onChange={e => setLocalOutputDeviceId(e.target.value)}
+              className="bg-background border border-border rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="">Default System Device</option>
+              {devices.map(device => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.label || `Device ${device.deviceId.slice(0, 5)}...`}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-muted-foreground">Select where the audio should be played.</span>
+          </div>
+        </div>
+
+        {/* Discord Config section */}
+        <DiscordSettingsSection />
 
         {/* Audio Strategy section */}
         <div className="flex flex-col gap-3">

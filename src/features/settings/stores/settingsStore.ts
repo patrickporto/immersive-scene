@@ -4,6 +4,10 @@ import { create } from 'zustand';
 export interface AppSettings {
   audio_file_strategy: 'reference' | 'copy';
   library_path: string;
+  output_device_id: string;
+  discord_bot_token: string;
+  discord_guild_id: string;
+  discord_channel_id: string;
 }
 
 interface SettingsState {
@@ -20,6 +24,10 @@ export const useSettingsStore = create<SettingsState>(set => ({
   settings: {
     audio_file_strategy: 'reference',
     library_path: '',
+    output_device_id: '',
+    discord_bot_token: '',
+    discord_guild_id: '',
+    discord_channel_id: '',
   },
   isLoading: false,
   error: null,
