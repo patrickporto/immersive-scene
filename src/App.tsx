@@ -12,6 +12,7 @@ import ChannelSidebar from './features/mixer/components/ChannelSidebar';
 import { SettingsModal } from './features/settings/components/SettingsModal';
 import { SoundSetBrowser } from './features/sound-sets/components/SoundSetBrowser';
 import { useElementGroupStore } from './features/sound-sets/stores/elementGroupStore';
+import { useGlobalOneShotStore } from './features/sound-sets/stores/globalOneShotStore';
 import { useSoundSetStore } from './features/sound-sets/stores/soundSetStore';
 import { useTimelineStore } from './features/sound-sets/stores/timelineStore';
 import { useToast } from './shared/hooks/useToast';
@@ -77,7 +78,49 @@ export default function App() {
         } else {
           toastError('Apenas áudios soltos podem ser inseridos no grupo.');
         }
+        return;
       }
+
+      const targetElementId = parseInt(combine.draggableId, 10);
+      if (
+        !isNaN(targetElementId) &&
+        elementId !== null &&
+        !isGroupDrag &&
+        elementId !== targetElementId
+      ) {
+        const state = useSoundSetStore.getState();
+        const globalState = useGlobalOneShotStore.getState();
+
+        let targetElement = state.audioElements.find(e => e.id === targetElementId);
+        let isGlobal = false;
+
+        if (!targetElement) {
+          targetElement = globalState.globalOneShots.find(e => e.id === targetElementId);
+          isGlobal = true;
+        }
+
+        if (targetElement) {
+          const soundSetId = isGlobal ? null : targetElement.sound_set_id;
+          const { createGroup, addElementToGroup } = useElementGroupStore.getState();
+
+          createGroup('New Group', soundSetId)
+            .then(newGroup => {
+              if (newGroup) {
+                Promise.all([
+                  addElementToGroup(newGroup.id, targetElementId),
+                  addElementToGroup(newGroup.id, elementId!),
+                ])
+                  .then(() => {
+                    success('Grupo criado');
+                  })
+                  .catch(err => toastError('Erro ao adicionar elementos ao grupo: ' + String(err)));
+              }
+            })
+            .catch(err => toastError('Erro ao criar grupo: ' + String(err)));
+        }
+        return;
+      }
+
       return;
     }
 

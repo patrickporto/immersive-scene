@@ -13,6 +13,7 @@ import { useAudioEngineStore } from '../stores/audioEngineStore';
 interface AudioElementCardProps {
   element: AudioElement;
   mode: 'mixing' | 'one-shot';
+  isCombineTarget?: boolean;
 }
 
 /**
@@ -20,9 +21,10 @@ interface AudioElementCardProps {
  * @param props - Component properties.
  * @param props.element - Audio element to render.
  * @param props.mode - Playback mode for interaction behavior.
+ * @param props.isCombineTarget - Whether the item is currently the target of a drag-to-combine.
  * @returns Audio element card.
  */
-export function AudioElementCard({ element, mode }: AudioElementCardProps) {
+export function AudioElementCard({ element, mode, isCombineTarget }: AudioElementCardProps) {
   const { play, pause, stop, sources, toggleLoop, selectedElementId, setSelectedElementId } =
     useAudioEngineStore();
   const { deleteAudioElement, loadAudioElements, selectedMood } = useSoundSetStore();
@@ -90,13 +92,19 @@ export function AudioElementCard({ element, mode }: AudioElementCardProps) {
   return (
     <motion.div
       whileHover={{ scale: 1.02 }}
+      animate={
+        isCombineTarget
+          ? { scale: 1.05, boxShadow: '0 0 25px rgba(168, 85, 247, 0.6)' }
+          : { scale: 1, boxShadow: 'none' }
+      }
       onClick={handleCardClick}
       className={cn(
-        'border rounded-xl p-3 flex items-center justify-between h-[80px] transition-all relative overflow-hidden cursor-pointer group/card gap-3',
+        'border rounded-xl p-3 flex items-center justify-between h-[80px] transition-all overflow-hidden cursor-pointer group/card gap-3',
         isPlaying
           ? 'border-cyan-400 shadow-[0_0_30px_rgba(0,212,255,0.3)] bg-gradient-to-br from-[#1a1a25] to-cyan-900/30'
           : 'border-white/[0.05] bg-[#1a1a25]',
-        selectedElementId === element.id && 'border-cyan-500 ring-1 ring-cyan-500/30'
+        selectedElementId === element.id && 'border-cyan-500 ring-1 ring-cyan-500/30',
+        isCombineTarget && 'border-purple-500 ring-2 ring-purple-500 bg-purple-500/10 z-50 relative'
       )}
     >
       {isPlaying && (

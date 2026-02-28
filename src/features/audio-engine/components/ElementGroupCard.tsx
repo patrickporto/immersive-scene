@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Droppable, Draggable } from '@hello-pangea/dnd';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Layers, ChevronDown } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 import { IconPause, IconPlay, IconTrash } from '../../../shared/components/Icons';
 import { Tooltip } from '../../../shared/components/Tooltip';
@@ -261,35 +262,43 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
                           draggableId={`member-${member.id}-audio-${el.id}-group-${group.id}`}
                           index={index}
                         >
-                          {(dragProvided, dragSnapshot) => (
-                            <div
-                              ref={dragProvided.innerRef}
-                              {...dragProvided.draggableProps}
-                              {...dragProvided.dragHandleProps}
-                              style={{
-                                ...dragProvided.draggableProps.style,
-                                opacity: dragSnapshot.isDragging ? 0.8 : 1,
-                                zIndex: dragSnapshot.isDragging ? 50 : 1,
-                              }}
-                              className={cn(
-                                'flex flex-row justify-between items-center p-1.5 rounded group/member',
-                                dragSnapshot.isDragging
-                                  ? 'bg-[#35254a] shadow-xl'
-                                  : 'hover:bg-white/5'
-                              )}
-                            >
-                              <span className="text-[11px] text-gray-300 truncate pr-2">
-                                {el.file_name}
-                              </span>
-                              <button
-                                onClick={e => void handleRemoveMember(e, member.id)}
-                                className="p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover/member:opacity-100 transition-all shrink-0"
-                                title="Remover áudio"
+                          {(dragProvided, dragSnapshot) => {
+                            const child = (
+                              <div
+                                ref={dragProvided.innerRef}
+                                {...dragProvided.draggableProps}
+                                {...dragProvided.dragHandleProps}
+                                style={{
+                                  ...dragProvided.draggableProps.style,
+                                  opacity: dragSnapshot.isDragging ? 0.8 : 1,
+                                  zIndex: dragSnapshot.isDragging ? 50 : 1,
+                                }}
+                                className={cn(
+                                  'flex flex-row justify-between items-center p-1.5 rounded group/member w-[240px]',
+                                  dragSnapshot.isDragging
+                                    ? 'bg-[#35254a] shadow-xl'
+                                    : 'hover:bg-white/5'
+                                )}
                               >
-                                <IconTrash className="w-3 h-3" />
-                              </button>
-                            </div>
-                          )}
+                                <span className="text-[11px] text-gray-300 truncate pr-2">
+                                  {el.file_name}
+                                </span>
+                                <button
+                                  onClick={e => void handleRemoveMember(e, member.id)}
+                                  className="p-1 text-gray-500 hover:text-red-400 opacity-0 group-hover/member:opacity-100 transition-all shrink-0 cursor-pointer"
+                                  title="Remover áudio"
+                                >
+                                  <IconTrash className="w-3 h-3" />
+                                </button>
+                              </div>
+                            );
+
+                            if (dragSnapshot.isDragging) {
+                              return createPortal(child, document.body);
+                            }
+
+                            return child;
+                          }}
                         </Draggable>
                       );
                     })}

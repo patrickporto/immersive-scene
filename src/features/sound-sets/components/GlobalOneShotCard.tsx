@@ -13,9 +13,10 @@ import { AudioElement } from '../stores/soundSetStore';
 
 interface GlobalOneShotCardProps {
   element: AudioElement;
+  isCombineTarget?: boolean;
 }
 
-export function GlobalOneShotCard({ element }: GlobalOneShotCardProps) {
+export function GlobalOneShotCard({ element, isCombineTarget }: GlobalOneShotCardProps) {
   const { play, pause, stop, sources, toggleLoop, selectedElementId, setSelectedElementId } =
     useAudioEngineStore();
   const { deleteGlobalOneShot } = useGlobalOneShotStore();
@@ -63,13 +64,19 @@ export function GlobalOneShotCard({ element }: GlobalOneShotCardProps) {
   return (
     <motion.div
       whileHover={{ scale: 1.02 }}
+      animate={
+        isCombineTarget
+          ? { scale: 1.05, boxShadow: '0 0 25px rgba(232, 121, 249, 0.6)' }
+          : { scale: 1, boxShadow: 'none' }
+      }
       onClick={handleCardClick}
       className={cn(
-        'border rounded-xl p-3 flex items-center justify-between h-[80px] transition-all relative overflow-hidden cursor-pointer group/card gap-3',
+        'border rounded-xl p-3 flex items-center justify-between h-[80px] transition-all overflow-hidden cursor-pointer group/card gap-3',
         isPlaying
           ? 'border-fuchsia-400 shadow-[0_0_30px_rgba(232,121,249,0.3)] bg-gradient-to-br from-[#1a1a25] to-fuchsia-900/30'
           : 'border-white/[0.05] bg-[#1a1a25]',
-        selectedElementId === element.id && 'border-fuchsia-500 ring-1 ring-fuchsia-500/30'
+        selectedElementId === element.id && 'border-fuchsia-500 ring-1 ring-fuchsia-500/30',
+        isCombineTarget && 'border-purple-500 ring-2 ring-purple-500 bg-purple-500/10 z-50 relative'
       )}
     >
       {isPlaying && (

@@ -1,4 +1,3 @@
-import type { ChangeEvent, KeyboardEvent } from 'react';
 import { useState, useEffect } from 'react';
 
 import { Draggable, Droppable } from '@hello-pangea/dnd';
@@ -7,7 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AudioElementCard } from './AudioElementCard';
 import { ElementGroupCard } from './ElementGroupCard';
 import { Modal } from '../../../shared/components';
-import { IconPlay, IconPlus } from '../../../shared/components/Icons';
+import { IconPlay } from '../../../shared/components/Icons';
 import { cn } from '../../../shared/utils/cn';
 import { GlobalOneShotsSection } from '../../sound-sets/components/GlobalOneShotsSection';
 import { useElementGroupStore } from '../../sound-sets/stores/elementGroupStore';
@@ -28,12 +27,9 @@ interface AudioUploaderProps {
 export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProps) {
   const { audioElements, channels } = useSoundSetStore();
   const { isUploading, selectFiles, processUpload } = useAudioUploader({ soundSetId });
-  const { groups, groupMembers, loadGroups, createGroup, loadGroupMembers } =
-    useElementGroupStore();
+  const { groups, groupMembers, loadGroups, loadGroupMembers } = useElementGroupStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
 
@@ -73,13 +69,6 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
     });
   }, [groups, groupMembers, loadGroupMembers]);
 
-  const handleConfirmCreateGroup = async () => {
-    if (!newGroupName.trim()) return;
-    await createGroup(newGroupName.trim(), soundSetId);
-    setNewGroupName('');
-    setIsGroupModalOpen(false);
-  };
-
   const isElementInAnyGroup = (elementId: number) => {
     return Object.values(groupMembers).some(members =>
       members.some(m => m.audio_element_id === elementId)
@@ -108,9 +97,13 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
           isDropDisabled={false}
           isCombineEnabled={true}
         >
-          {provided => (
+          {(provided, snapshot) => (
             <div
-              className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3"
+              className={cn(
+                'grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 p-2 rounded-xl transition-all border-2 border-transparent',
+                snapshot.isDraggingOver &&
+                  'border-cyan-500/50 bg-cyan-500/5 shadow-[inset_0_0_20px_rgba(0,212,255,0.1)]'
+              )}
               ref={provided.innerRef}
               {...provided.droppableProps}
             >
@@ -141,26 +134,6 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
                   </div>
                   <div className="text-[9px] text-gray-600 truncate mt-0.5">
                     {isUploading ? 'Please wait' : 'Click to upload files'}
-                  </div>
-                </div>
-              </motion.div>
-
-              <motion.div
-                layout
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setIsGroupModalOpen(true)}
-                className="bg-[#1a1a25]/50 border border-dashed border-white/10 rounded-xl px-4 py-3 flex items-center justify-start h-[80px] transition-all cursor-pointer group hover:border-purple-500/50 hover:bg-purple-500/5 gap-4"
-              >
-                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-white/5 group-hover:bg-purple-500/10 transition-colors shrink-0">
-                  <IconPlus className="w-5 h-5 text-gray-500 group-hover:text-purple-400 transition-colors" />
-                </div>
-                <div className="flex-1 text-left min-w-0">
-                  <div className="text-[11px] font-bold text-gray-500 uppercase tracking-widest group-hover:text-purple-400 transition-colors truncate">
-                    Create Group
-                  </div>
-                  <div className="text-[9px] text-gray-600 truncate mt-0.5">
-                    Group elements for random play
                   </div>
                 </div>
               </motion.div>
@@ -215,7 +188,11 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
                         }}
                         className="h-full"
                       >
-                        <AudioElementCard element={element} mode="mixing" />
+                        <AudioElementCard
+                          element={element}
+                          mode="mixing"
+                          isCombineTarget={!!dragSnapshot.combineTargetFor}
+                        />
                       </div>
                     )}
                   </Draggable>
@@ -288,46 +265,6 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
               </p>
             )}
           </div>
-        </div>
-      </Modal>
-
-      <Modal
-        isOpen={isGroupModalOpen}
-        onClose={() => setIsGroupModalOpen(false)}
-        title="Create Element Group"
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => setIsGroupModalOpen(false)}
-              className="px-4 py-2 rounded bg-zinc-800 text-white hover:bg-zinc-700 transition"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => void handleConfirmCreateGroup()}
-              disabled={!newGroupName.trim()}
-              className="px-4 py-2 rounded bg-purple-500 text-white font-bold hover:bg-purple-400 transition disabled:opacity-50"
-            >
-              Create Group
-            </button>
-          </div>
-        }
-      >
-        <div className="text-zinc-300">
-          <p className="mb-4 text-sm text-gray-400">
-            Groups allow you to gather multiple audio elements. When triggered, the group will
-            randomly play one of its members without immediate repeats.
-          </p>
-          <input
-            type="text"
-            placeholder="e.g. Sword Swings, Footsteps, Impacts"
-            value={newGroupName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setNewGroupName(e.target.value)}
-            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-              if (e.key === 'Enter') void handleConfirmCreateGroup();
-            }}
-            className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-2 text-white placeholder:text-gray-600 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50 transition-all font-mono text-sm"
-          />
         </div>
       </Modal>
     </div>
