@@ -306,20 +306,17 @@ export default function App() {
       <DragDropContext onDragEnd={handleDragEnd}>
         <main className="flex-1 flex flex-col relative overflow-hidden">
           <div className="flex-1 overflow-y-auto custom-scrollbar relative">
-            {!selectedSoundSet && (
-              <div className="flex items-center justify-center h-full text-gray-500 font-medium tracking-wider uppercase text-sm">
-                Select or create a SoundSet to begin.
+            {!selectedMood && (
+              <div className="flex items-center justify-center h-full text-gray-500 font-medium tracking-wider uppercase text-sm px-8 text-center">
+                Select or create a Mood to begin.
               </div>
             )}
 
-            {selectedSoundSet && !selectedMood && (
-              <div className="flex items-center justify-center h-full text-gray-500 font-medium tracking-wider uppercase text-sm">
-                Select or create a Mood for &quot;{selectedSoundSet.name}&quot;
-              </div>
-            )}
-
-            {selectedSoundSet && selectedMood && (
-              <AudioUploader soundSetId={selectedSoundSet.id} moodId={selectedMood.id} />
+            {selectedMood && (
+              <AudioUploader
+                soundSetId={selectedSoundSet?.id ?? selectedMood.sound_set_id}
+                moodId={selectedMood.id}
+              />
             )}
           </div>
 
@@ -328,7 +325,7 @@ export default function App() {
             <div className="h-24">
               <BottomPlayer />
             </div>
-            {selectedSoundSet && selectedMood && <TimelineEditor moodId={selectedMood.id} />}
+            {selectedMood && <TimelineEditor moodId={selectedMood.id} />}
           </div>
         </main>
       </DragDropContext>
