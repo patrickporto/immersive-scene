@@ -53,6 +53,11 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: 1
           NO_STRIP: 1
 
+      - name: Copy binary and icon for flatpak
+        run: |
+          cp src-tauri/target/release/immersive-scene packaging/flatpak/
+          cp src-tauri/icons/128x128.png packaging/flatpak/icon.png
+
       - name: Configure Flatpak runtime
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
