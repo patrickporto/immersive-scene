@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: desktop-build-${{ github.ref }}
@@ -61,6 +63,11 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake opus pkg-config
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -101,3 +108,16 @@ jobs:
           name: checksums-${{ matrix.artifact-name }}
           path: src-tauri/target/release/bundle/checksums-${{ matrix.artifact-name }}.txt
           if-no-files-found: error
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ matrix.artifact-path }}
+            src-tauri/target/release/bundle/checksums-${{ matrix.artifact-name }}.txt
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
