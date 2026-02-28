@@ -170,8 +170,8 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
                     ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400'
                     : 'bg-black/40 border-white/5 text-gray-500 hover:text-white hover:border-white/20',
                 !soundSet.is_enabled &&
-                !selectedSoundSetIds.includes(soundSet.id) &&
-                'opacity-50 grayscale'
+                  !selectedSoundSetIds.includes(soundSet.id) &&
+                  'opacity-50 grayscale'
               )}
               title={soundSet.name}
             >

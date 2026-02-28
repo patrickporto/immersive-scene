@@ -25,7 +25,7 @@ export function GlobalOneShotsSection() {
 
   useEffect(() => {
     void loadGlobalOneShots();
-    void loadGroups(null);
+    void loadGroups();
   }, [loadGlobalOneShots, loadGroups]);
 
   const handleCreateOneShot = async () => {

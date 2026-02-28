@@ -83,11 +83,7 @@ export function DiscordSettingsSection() {
               disabled={isValidating || !token}
               className="px-6 py-3 bg-cyan-500 text-zinc-950 text-sm font-bold rounded-2xl transition-all disabled:opacity-30 flex items-center gap-2 whitespace-nowrap active:scale-95 shadow-lg shadow-cyan-500/10"
             >
-              {isValidating ? (
-                <RefreshCw size={16} className="animate-spin" />
-              ) : (
-                'Validate'
-              )}
+              {isValidating ? <RefreshCw size={16} className="animate-spin" /> : 'Validate'}
             </button>
           </div>
           <p className="text-xs text-zinc-500 leading-relaxed px-1">
@@ -100,7 +96,8 @@ export function DiscordSettingsSection() {
             >
               Discord Developer Portal <ExternalLink size={10} />
             </a>
-            . Permissions: <code className="bg-white/5 px-1.5 py-0.5 rounded text-zinc-400">Connect</code>,{' '}
+            . Permissions:{' '}
+            <code className="bg-white/5 px-1.5 py-0.5 rounded text-zinc-400">Connect</code>,{' '}
             <code className="bg-white/5 px-1.5 py-0.5 rounded text-zinc-400">Speak</code>.
           </p>
         </div>
@@ -241,14 +238,15 @@ export function DiscordSettingsSection() {
         <button
           onClick={handleSaveConfig}
           disabled={!channelId || !guildId || !token}
-          className={`flex items-center gap-3 px-8 py-3 rounded-2xl text-sm font-black transition-all active:scale-95 shadow-2xl ${!channelId || !guildId || !token
+          className={`flex items-center gap-3 px-8 py-3 rounded-2xl text-sm font-black transition-all active:scale-95 shadow-2xl ${
+            !channelId || !guildId || !token
               ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed shadow-none'
               : 'bg-[#5865F2] text-white hover:bg-[#4752C4] shadow-[#5865f2]/20'
-            }`}
+          }`}
         >
           {settings.discord_bot_token === token &&
-            settings.discord_guild_id === guildId &&
-            settings.discord_channel_id === channelId ? (
+          settings.discord_guild_id === guildId &&
+          settings.discord_channel_id === channelId ? (
             <>
               <CheckCircle2 size={18} /> Connected
             </>

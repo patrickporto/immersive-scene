@@ -116,7 +116,7 @@ export function AudioUploader({ soundSetId: _soundSetId, moodId: _moodId }: Audi
               className={cn(
                 'grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 p-2 rounded-xl transition-all border-2 border-transparent',
                 snapshot.isDraggingOver &&
-                'border-cyan-500/50 bg-cyan-500/5 shadow-[inset_0_0_20px_rgba(0,212,255,0.1)]'
+                  'border-cyan-500/50 bg-cyan-500/5 shadow-[inset_0_0_20px_rgba(0,212,255,0.1)]'
               )}
               ref={provided.innerRef}
               {...provided.droppableProps}

@@ -118,7 +118,7 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
           className={cn(
             'relative group/groupCard transition-all h-full',
             snapshot.isDraggingOver &&
-            'ring-2 ring-purple-500 ring-offset-2 ring-offset-[#0a0a0f] rounded-xl scale-[1.02]'
+              'ring-2 ring-purple-500 ring-offset-2 ring-offset-[#0a0a0f] rounded-xl scale-[1.02]'
           )}
         >
           {/* Background stacked layers to indicate group */}

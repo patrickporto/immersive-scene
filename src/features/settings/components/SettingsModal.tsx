@@ -2,15 +2,7 @@ import React, { useEffect, useState } from 'react';
 
 import { open } from '@tauri-apps/plugin-dialog';
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Activity,
-  CheckCircle2,
-  Database,
-  FolderOpen,
-  Info,
-  Shield,
-  Volume2,
-} from 'lucide-react';
+import { Activity, CheckCircle2, Database, FolderOpen, Info, Shield, Volume2 } from 'lucide-react';
 
 import { DiscordSettingsSection } from './DiscordSettingsSection';
 import { Modal } from '../../../shared/components/Modal';
@@ -103,13 +95,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   };
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title="Settings"
-      size="4xl"
-      className="max-h-[85vh]"
-    >
+    <Modal isOpen={isOpen} onClose={onClose} title="Settings" size="4xl" className="max-h-[85vh]">
       <div className="flex h-[700px] overflow-hidden bg-zinc-950/50">
         {/* Sidebar */}
         <div className="w-64 border-r border-white/5 bg-zinc-900/50 backdrop-blur-md flex flex-col">
@@ -118,10 +104,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as SettingsTab)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all relative group ${activeTab === tab.id
-                  ? 'text-cyan-400 bg-cyan-500/10'
-                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
-                  }`}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all relative group ${
+                  activeTab === tab.id
+                    ? 'text-cyan-400 bg-cyan-500/10'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+                }`}
               >
                 {activeTab === tab.id && (
                   <motion.div
@@ -134,8 +121,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 )}
                 <tab.icon
                   size={18}
-                  className={`relative z-10 transition-colors ${activeTab === tab.id ? 'text-cyan-400' : 'group-hover:text-zinc-200'
-                    }`}
+                  className={`relative z-10 transition-colors ${
+                    activeTab === tab.id ? 'text-cyan-400' : 'group-hover:text-zinc-200'
+                  }`}
                 />
                 <span className="relative z-10">{tab.label}</span>
               </button>
@@ -242,15 +230,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                           <button
                             key={strategy.id}
                             onClick={() => setLocalStrategy(strategy.id as 'reference' | 'copy')}
-                            className={`p-5 rounded-2xl border transition-all text-left group relative overflow-hidden ${localStrategy === strategy.id
-                              ? 'bg-cyan-500/10 border-cyan-500/50 ring-1 ring-cyan-500/20'
-                              : 'bg-zinc-900/50 border-white/5 hover:border-white/10'
-                              }`}
+                            className={`p-5 rounded-2xl border transition-all text-left group relative overflow-hidden ${
+                              localStrategy === strategy.id
+                                ? 'bg-cyan-500/10 border-cyan-500/50 ring-1 ring-cyan-500/20'
+                                : 'bg-zinc-900/50 border-white/5 hover:border-white/10'
+                            }`}
                           >
                             <div className="flex items-center justify-between mb-2">
                               <span
-                                className={`font-bold ${localStrategy === strategy.id ? 'text-cyan-400' : 'text-zinc-300'
-                                  }`}
+                                className={`font-bold ${
+                                  localStrategy === strategy.id ? 'text-cyan-400' : 'text-zinc-300'
+                                }`}
                               >
                                 {strategy.title}
                               </span>
@@ -267,10 +257,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     </section>
 
                     <section
-                      className={`space-y-4 transition-all ${localStrategy === 'reference'
-                        ? 'opacity-40 grayscale cursor-not-allowed pointer-events-none'
-                        : ''
-                        }`}
+                      className={`space-y-4 transition-all ${
+                        localStrategy === 'reference'
+                          ? 'opacity-40 grayscale cursor-not-allowed pointer-events-none'
+                          : ''
+                      }`}
                     >
                       <label className="text-sm font-semibold text-zinc-400 uppercase tracking-wider px-1">
                         Library Location
@@ -337,10 +328,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         <button
                           onClick={checkForUpdates}
                           disabled={isChecking}
-                          className={`mt-10 w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl text-sm font-bold transition-all active:scale-95 shadow-xl ${isChecking
-                            ? 'bg-zinc-800 text-zinc-500'
-                            : 'bg-cyan-500 text-zinc-950 hover:bg-cyan-400 shadow-cyan-500/10'
-                            }`}
+                          className={`mt-10 w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl text-sm font-bold transition-all active:scale-95 shadow-xl ${
+                            isChecking
+                              ? 'bg-zinc-800 text-zinc-500'
+                              : 'bg-cyan-500 text-zinc-950 hover:bg-cyan-400 shadow-cyan-500/10'
+                          }`}
                         >
                           {isChecking ? (
                             <>
@@ -353,8 +345,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         </button>
 
                         <p
-                          className={`mt-4 text-xs flex items-center gap-2 ${updateStatus === 'up-to-date' ? 'text-green-500' : 'text-zinc-500'
-                            }`}
+                          className={`mt-4 text-xs flex items-center gap-2 ${
+                            updateStatus === 'up-to-date' ? 'text-green-500' : 'text-zinc-500'
+                          }`}
                         >
                           {updateStatus === 'up-to-date' && <CheckCircle2 size={14} />}
                           {updateMessage || 'No recent checks'}

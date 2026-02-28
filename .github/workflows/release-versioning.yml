@@ -36,5 +36,6 @@ jobs:
         with:
           version: npm run version-packages
           publish: npm run release
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

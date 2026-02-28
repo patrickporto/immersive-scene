@@ -259,7 +259,8 @@ export function TimelineTrackLane({
                             : isGroup
                               ? 'bg-gradient-to-r from-[#1a1e2d] to-[#2d1b36] border-purple-500/30 hover:border-purple-400'
                               : 'bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border-cyan-500/30 hover:border-cyan-400',
-                          !element.is_available && 'opacity-50 grayscale border-dashed bg-black/50 from-black/50 to-black/50 hover:border-red-500/50'
+                          !element.is_available &&
+                            'opacity-50 grayscale border-dashed bg-black/50 from-black/50 to-black/50 hover:border-red-500/50'
                         )}
                         style={{
                           left: `${leftPercent}%`,
@@ -322,7 +323,7 @@ export function TimelineTrackLane({
                         {!element.is_available && sourceSoundSet && (
                           <div
                             className="absolute -top-2 -right-2 bg-red-900 border border-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-xl pointer-events-auto cursor-pointer hover:bg-red-800 transition-colors flex items-center gap-1"
-                            onClick={(e) => {
+                            onClick={e => {
                               e.stopPropagation();
                               void toggleSoundSetEnabled(sourceSoundSet.id, true).then(() => {
                                 void loadAudioElements();

@@ -17,7 +17,7 @@
     "prepare": "husky",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "release": "changeset publish"
+    "release": "changeset tag"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

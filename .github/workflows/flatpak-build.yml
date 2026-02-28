@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - 'v*'
+      - 'immersive-scene@*'
   workflow_dispatch:
 
 permissions:
