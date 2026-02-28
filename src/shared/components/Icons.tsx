@@ -188,3 +188,11 @@ export function IconZap(props: ComponentProps<'svg'>) {
     </Icon>
   );
 }
+
+export function IconCheck(props: ComponentProps<'svg'>) {
+  return (
+    <Icon {...props}>
+      <polyline points="20 6 9 17 4 12" />
+    </Icon>
+  );
+}

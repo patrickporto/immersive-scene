@@ -8,19 +8,12 @@ import { useToast } from '../../../shared/hooks/useToast';
 import { useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
 import { useAudioEngineStore } from '../stores/audioEngineStore';
 
-interface UseAudioUploaderOptions {
-  soundSetId: number;
-}
-
 const VALID_EXTENSIONS = ['.ogg', '.mp3', '.wav', '.flac'];
-
 /**
  * @description Handles audio preload and upload workflow for a sound set.
- * @param options - Hook options.
- * @param options.soundSetId - Active sound set identifier.
  * @returns Upload state and upload action.
  */
-export function useAudioUploader({ soundSetId }: UseAudioUploaderOptions) {
+export function useAudioUploader() {
   const { createAudioElement, loadAudioElements } = useSoundSetStore();
   const { initAudioContext, loadAudioFile } = useAudioEngineStore();
   const { success, error } = useToast();
@@ -48,7 +41,7 @@ export function useAudioUploader({ soundSetId }: UseAudioUploaderOptions) {
     }
   };
 
-  const processUpload = async (files: string[], channelId: number | null) => {
+  const processUpload = async (files: string[], soundSetId: number, channelId: number | null) => {
     if (files.length === 0) return;
     setIsUploading(true);
     await initAudioContext();
@@ -76,7 +69,7 @@ export function useAudioUploader({ soundSetId }: UseAudioUploaderOptions) {
         }
       }
 
-      await loadAudioElements(soundSetId);
+      await loadAudioElements();
 
       if (uploadCount > 0) {
         success(`Successfully uploaded ${uploadCount} file(s)`);

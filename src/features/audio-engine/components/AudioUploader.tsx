@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AudioElementCard } from './AudioElementCard';
 import { ElementGroupCard } from './ElementGroupCard';
 import { Modal } from '../../../shared/components';
-import { IconPlay } from '../../../shared/components/Icons';
+import { IconPlay, IconMusic, IconPlus, IconCheck } from '../../../shared/components/Icons';
 import { cn } from '../../../shared/utils/cn';
 import { GlobalOneShotsSection } from '../../sound-sets/components/GlobalOneShotsSection';
 import { useElementGroupStore } from '../../sound-sets/stores/elementGroupStore';
@@ -24,36 +24,45 @@ interface AudioUploaderProps {
  * @param props.soundSetId - Active sound set identifier.
  * @returns Audio uploader workspace.
  */
-export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProps) {
-  const { audioElements, channels, selectedSoundSetIds } = useSoundSetStore();
-  const { isUploading, selectFiles, processUpload } = useAudioUploader({ soundSetId });
+export function AudioUploader({ soundSetId: _soundSetId, moodId: _moodId }: AudioUploaderProps) {
+  const { soundSets, audioElements, channels, selectedSoundSetIds } = useSoundSetStore();
+  const { isUploading, selectFiles, processUpload } = useAudioUploader();
   const { groups, groupMembers, loadGroups, loadGroupMembers } = useElementGroupStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
+  const [step, setStep] = useState<'soundset' | 'channel'>('soundset');
+  const [targetSoundSetId, setTargetSoundSetId] = useState<number | null>(null);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
 
   const handleUploadClick = async () => {
     const files = await selectFiles();
     if (files.length > 0) {
       setPendingFiles(files);
-      if (channels.length > 0) {
-        setSelectedChannelId(channels[0].id);
-      }
+      setStep('soundset');
       setIsModalOpen(true);
     }
   };
 
+  const handleSoundSetSelect = (id: number) => {
+    setTargetSoundSetId(id);
+    // Auto-advance with a slight delay for feedback
+    setTimeout(() => setStep('channel'), 300);
+  };
+
   const handleConfirmUpload = async () => {
+    if (!targetSoundSetId) return;
     setIsModalOpen(false);
-    await processUpload(pendingFiles, selectedChannelId);
+    await processUpload(pendingFiles, targetSoundSetId, selectedChannelId);
     setPendingFiles([]);
+    setTargetSoundSetId(null);
     setSelectedChannelId(null);
   };
 
   const handleCancelUpload = () => {
     setIsModalOpen(false);
     setPendingFiles([]);
+    setTargetSoundSetId(null);
     setSelectedChannelId(null);
   };
 
@@ -214,62 +223,176 @@ export function AudioUploader({ soundSetId, moodId: _moodId }: AudioUploaderProp
       <Modal
         isOpen={isModalOpen}
         onClose={handleCancelUpload}
-        title="Upload Elements"
+        title={step === 'soundset' ? 'Select Destination' : 'Select Channel'}
         footer={
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={handleCancelUpload}
-              className="px-4 py-2 rounded bg-zinc-800 text-white hover:bg-zinc-700 transition"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => void handleConfirmUpload()}
-              className="px-4 py-2 rounded bg-cyan-500 text-black font-bold hover:bg-cyan-400 transition cursor-pointer"
-            >
-              Upload
-            </button>
+          <div className="flex justify-between items-center w-full">
+            <div className="flex gap-1">
+              <div
+                className={cn(
+                  'w-1.5 h-1.5 rounded-full transition-all',
+                  step === 'soundset' ? 'bg-cyan-500 w-4' : 'bg-white/20'
+                )}
+              />
+              <div
+                className={cn(
+                  'w-1.5 h-1.5 rounded-full transition-all',
+                  step === 'channel' ? 'bg-cyan-500 w-4' : 'bg-white/20'
+                )}
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleCancelUpload}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              {step === 'channel' && (
+                <button
+                  onClick={() => setStep('soundset')}
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-white/5 hover:bg-white/10 text-white transition-all"
+                >
+                  Back
+                </button>
+              )}
+              {step === 'channel' && (
+                <button
+                  onClick={() => void handleConfirmUpload()}
+                  disabled={!targetSoundSetId}
+                  className="px-6 py-2 rounded-lg bg-cyan-500 text-black font-bold text-sm hover:bg-cyan-400 transition-all shadow-[0_0_20px_rgba(0,212,255,0.3)] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Confirm Upload
+                </button>
+              )}
+            </div>
           </div>
         }
       >
-        <div className="text-zinc-300">
-          <p className="mb-4">
-            You are about to upload {pendingFiles.length} file{pendingFiles.length > 1 ? 's' : ''}.
-          </p>
-          <p className="mb-2 text-sm text-gray-400">Select target channel:</p>
-          <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
-            {channels.map(ch => (
-              <label
-                key={ch.id}
-                className={cn(
-                  'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all',
-                  selectedChannelId === ch.id
-                    ? 'border-cyan-500 bg-cyan-500/10'
-                    : 'border-white/10 hover:border-white/30 bg-[#1a1a25]/50'
-                )}
+        <div className="relative min-h-[360px] overflow-hidden">
+          <AnimatePresence mode="wait" initial={false}>
+            {step === 'soundset' ? (
+              <motion.div
+                key="step-soundset"
+                initial={{ x: 50, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -50, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="space-y-4"
               >
-                <input
-                  type="radio"
-                  name="channel"
-                  value={ch.id}
-                  checked={selectedChannelId === ch.id}
-                  onChange={() => setSelectedChannelId(ch.id)}
-                  className="hidden"
-                />
-                <div className="w-4 h-4 rounded-full border border-cyan-500 flex items-center justify-center shrink-0">
-                  {selectedChannelId === ch.id && (
-                    <div className="w-2 h-2 rounded-full bg-cyan-500" />
-                  )}
+                <div className="px-1">
+                  <h3 className="text-lg font-bold text-white mb-1">Target SoundSet</h3>
+                  <p className="text-xs text-gray-500 mb-6">
+                    Where should these {pendingFiles.length} elements be stored?
+                  </p>
                 </div>
-                <span className="font-bold flex-1 text-white">{ch.name}</span>
-              </label>
-            ))}
-            {channels.length === 0 && (
-              <p className="text-gray-500 italic text-sm py-2">
-                No channels available. They will be added dynamically or placed loosely.
-              </p>
+                <div className="grid grid-cols-2 gap-3 max-h-[280px] overflow-y-auto custom-scrollbar pr-2 pb-2">
+                  {soundSets.map(ss => (
+                    <motion.button
+                      key={ss.id}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => handleSoundSetSelect(ss.id)}
+                      className={cn(
+                        'flex flex-col items-start p-4 rounded-xl border-2 text-left transition-all group relative overflow-hidden',
+                        targetSoundSetId === ss.id
+                          ? 'border-cyan-500 bg-cyan-500/10 shadow-[0_0_20px_rgba(0,212,255,0.1)]'
+                          : 'border-white/5 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]'
+                      )}
+                    >
+                      <div className="mb-3 w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center group-hover:bg-cyan-500/20 transition-colors">
+                        <IconMusic className="w-4 h-4 text-gray-400 group-hover:text-cyan-400" />
+                      </div>
+                      <span className="font-bold text-sm text-white truncate w-full">
+                        {ss.name}
+                      </span>
+                      <span className="text-[10px] text-gray-500 mt-1 uppercase tracking-tight">
+                        Library
+                      </span>
+                      {targetSoundSetId === ss.id && (
+                        <motion.div
+                          layoutId="active-ss-glow"
+                          className="absolute inset-0 bg-cyan-500/5 pointer-events-none"
+                        />
+                      )}
+                    </motion.button>
+                  ))}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="step-channel"
+                initial={{ x: 50, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: -50, opacity: 0 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="space-y-4"
+              >
+                <div className="px-1">
+                  <h3 className="text-lg font-bold text-white mb-1">Audio Channel</h3>
+                  <p className="text-xs text-gray-500 mb-6">
+                    Select a Mixer channel for routing (optional).
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-2 max-h-[280px] overflow-y-auto custom-scrollbar pr-2 pb-2">
+                  <button
+                    onClick={() => setSelectedChannelId(null)}
+                    className={cn(
+                      'flex items-center gap-4 p-4 rounded-xl border-2 transition-all group',
+                      selectedChannelId === null
+                        ? 'border-cyan-500 bg-cyan-500/10'
+                        : 'border-white/5 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]'
+                    )}
+                  >
+                    <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center text-gray-500 group-hover:border-cyan-500/50 transition-all">
+                      <IconPlus className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 text-left">
+                      <div className="font-bold text-sm text-white">No Channel</div>
+                      <div className="text-[10px] text-gray-500">
+                        Elements will use default routing
+                      </div>
+                    </div>
+                  </button>
+
+                  {channels.map(ch => (
+                    <button
+                      key={ch.id}
+                      onClick={() => setSelectedChannelId(ch.id)}
+                      className={cn(
+                        'flex items-center gap-4 p-4 rounded-xl border-2 transition-all group',
+                        selectedChannelId === ch.id
+                          ? 'border-cyan-500 bg-cyan-500/10'
+                          : 'border-white/5 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]'
+                      )}
+                    >
+                      <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center overflow-hidden">
+                        <div className="w-full h-full flex items-center justify-center gap-[1px]">
+                          {[0.4, 0.7, 0.5, 0.8, 0.3].map((h, i) => (
+                            <motion.div
+                              key={i}
+                              animate={{
+                                height: selectedChannelId === ch.id ? `${h * 60}%` : '20%',
+                              }}
+                              className="w-1 bg-cyan-500/50 rounded-full"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex-1 text-left">
+                        <div className="font-bold text-sm text-white">{ch.name}</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-tighter">
+                          Mixer Node
+                        </div>
+                      </div>
+                      {selectedChannelId === ch.id && (
+                        <IconCheck className="w-5 h-5 text-cyan-400" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
             )}
-          </div>
+          </AnimatePresence>
         </div>
       </Modal>
     </div>
