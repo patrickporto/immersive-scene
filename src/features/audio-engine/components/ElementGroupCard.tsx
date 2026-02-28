@@ -15,7 +15,7 @@ import {
   ElementGroupMember,
   useElementGroupStore,
 } from '../../sound-sets/stores/elementGroupStore';
-import { AudioElement } from '../../sound-sets/stores/soundSetStore';
+import { AudioElement, useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
 import { useAudioEngineStore } from '../stores/audioEngineStore';
 
 interface ElementGroupCardProps {
@@ -30,7 +30,10 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
   const { deleteGroup, removeElementFromGroup } = useElementGroupStore();
   const { play, pause, stop, sources } = useAudioEngineStore();
   const { channels, setChannelVolume } = useMixerStore();
+  const { soundSets } = useSoundSetStore();
   const { success, error } = useToast();
+
+  const sourceSoundSet = soundSets.find(s => s.id === group.sound_set_id);
 
   // Find all actual audio elements for the members
   const memberElements = useMemo(() => {
@@ -115,7 +118,7 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
           className={cn(
             'relative group/groupCard transition-all h-full',
             snapshot.isDraggingOver &&
-              'ring-2 ring-purple-500 ring-offset-2 ring-offset-[#0a0a0f] rounded-xl scale-[1.02]'
+            'ring-2 ring-purple-500 ring-offset-2 ring-offset-[#0a0a0f] rounded-xl scale-[1.02]'
           )}
         >
           {/* Background stacked layers to indicate group */}
@@ -183,6 +186,15 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
                   <span className="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded border border-white/5">
                     {members.length} itens (RND)
                   </span>
+
+                  {sourceSoundSet && (
+                    <span
+                      className="text-[8px] font-bold text-gray-500 uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/40 border border-white/10 shrink-0 truncate max-w-[80px]"
+                      title={`Source: ${sourceSoundSet.name}`}
+                    >
+                      {sourceSoundSet.name}
+                    </span>
+                  )}
 
                   <button
                     onClick={event => {

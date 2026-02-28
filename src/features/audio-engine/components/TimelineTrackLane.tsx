@@ -6,7 +6,7 @@ import { IconPlay, IconTrash } from '../../../shared/components/Icons';
 import { Tooltip } from '../../../shared/components/Tooltip';
 import { cn } from '../../../shared/utils/cn';
 import { useElementGroupStore } from '../../sound-sets/stores/elementGroupStore';
-import { AudioElement } from '../../sound-sets/stores/soundSetStore';
+import { useSoundSetStore, AudioElement } from '../../sound-sets/stores/soundSetStore';
 import { TimelineElement, TimelineTrack } from '../../sound-sets/stores/timelineStore';
 
 interface TimelineTrackLaneProps {
@@ -111,7 +111,8 @@ export function TimelineTrackLane({
   onUpdateElement,
   onToggleTrackLooping,
 }: TimelineTrackLaneProps) {
-  const { groups } = useElementGroupStore();
+  const { groups, loadGroups } = useElementGroupStore();
+  const { soundSets, toggleSoundSetEnabled, loadAudioElements } = useSoundSetStore();
 
   return (
     <div className="flex h-24 relative border-b border-white/5 bg-[#1a1a25]/30 group/track">
@@ -173,6 +174,7 @@ export function TimelineTrackLane({
                   .map(element => {
                     let displayName: string;
                     let isGroup: boolean;
+                    let sourceSoundSetId: number | null = null;
 
                     if (element.audio_element_id !== null) {
                       const audioElement = audioElements.find(
@@ -181,6 +183,7 @@ export function TimelineTrackLane({
                       if (!audioElement) return null;
                       displayName = audioElement.file_name.split('.')[0];
                       isGroup = false;
+                      sourceSoundSetId = audioElement.sound_set_id;
                     } else if (element.element_group_id !== null) {
                       const group = groups.find(
                         candidate => candidate.id === Number(element.element_group_id)
@@ -188,9 +191,14 @@ export function TimelineTrackLane({
                       if (!group) return null;
                       displayName = group.name;
                       isGroup = true;
+                      sourceSoundSetId = group.sound_set_id;
                     } else {
                       return null;
                     }
+
+                    const sourceSoundSet = soundSets.find(
+                      (s: { id: number; name: string }) => s.id === sourceSoundSetId
+                    );
 
                     const leftPercent = (element.start_time_ms / timelineEditorDurationMs) * 100;
                     const widthPercent = (element.duration_ms / timelineEditorDurationMs) * 100;
@@ -250,7 +258,8 @@ export function TimelineTrackLane({
                               : 'bg-cyan-500/20 border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.3)]'
                             : isGroup
                               ? 'bg-gradient-to-r from-[#1a1e2d] to-[#2d1b36] border-purple-500/30 hover:border-purple-400'
-                              : 'bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border-cyan-500/30 hover:border-cyan-400'
+                              : 'bg-gradient-to-r from-[#1a1e2d] to-[#1e293b] border-cyan-500/30 hover:border-cyan-400',
+                          !element.is_available && 'opacity-50 grayscale border-dashed bg-black/50 from-black/50 to-black/50 hover:border-red-500/50'
                         )}
                         style={{
                           left: `${leftPercent}%`,
@@ -280,8 +289,18 @@ export function TimelineTrackLane({
                               <IconPlay className="w-2.5 h-2.5 ml-0.5" />
                             </div>
                             <div className="flex-1 min-w-0 pointer-events-none ml-1.5 flex flex-col justify-center">
-                              <div className="text-[10px] text-gray-200 font-bold truncate mb-0.5 drop-shadow-md">
-                                {displayName}
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <div className="text-[10px] text-gray-200 font-bold truncate drop-shadow-md">
+                                  {displayName}
+                                </div>
+                                {sourceSoundSet && (
+                                  <span
+                                    className="text-[7px] font-bold text-gray-500 uppercase tracking-widest px-1 py-0.5 rounded bg-black/40 border border-white/10 shrink-0 truncate max-w-[50px]"
+                                    title={`Source: ${sourceSoundSet.name}`}
+                                  >
+                                    {sourceSoundSet.name}
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[8px] text-cyan-500 font-mono tracking-wider truncate">
                                 {(element.start_time_ms / 1000).toFixed(1)}s
@@ -299,6 +318,22 @@ export function TimelineTrackLane({
                         >
                           <IconTrash className="w-3.5 h-3.5" />
                         </button>
+
+                        {!element.is_available && sourceSoundSet && (
+                          <div
+                            className="absolute -top-2 -right-2 bg-red-900 border border-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-xl pointer-events-auto cursor-pointer hover:bg-red-800 transition-colors flex items-center gap-1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void toggleSoundSetEnabled(sourceSoundSet.id, true).then(() => {
+                                void loadAudioElements();
+                                void loadGroups();
+                              });
+                            }}
+                            title={`Source "${sourceSoundSet.name}" is disabled. Click to re-enable.`}
+                          >
+                            <span>⚠️</span> Enable source
+                          </div>
+                        )}
                       </motion.div>
                     );
                   })}

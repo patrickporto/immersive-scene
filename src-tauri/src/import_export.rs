@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -17,7 +17,8 @@ pub struct ExportManifest {
     pub soundset: ExportSoundSet,
     pub channels: Vec<ExportChannel>,
     pub elements: Vec<ExportElement>,
-    pub moods: Vec<ExportMood>,
+    #[serde(default)]
+    pub groups: Vec<ExportGroup>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,30 +45,15 @@ pub struct ExportElement {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExportMood {
+pub struct ExportGroup {
     pub name: String,
-    pub description: String,
-    pub timeline: Option<ExportTimeline>,
+    pub members: Vec<ExportGroupMember>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExportTimeline {
-    pub is_looping: bool,
-    pub tracks: Vec<ExportTrack>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExportTrack {
-    pub name: String,
-    pub order_index: i64,
-    pub clips: Vec<ExportClip>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExportClip {
+pub struct ExportGroupMember {
     pub element_file_name: String,
-    pub start_time_ms: i64,
-    pub duration_ms: i64,
+    pub order_index: i64,
 }
 
 pub fn package_sound_set_folder(
@@ -226,9 +212,9 @@ fn load_manifest_from_folder(source_folder: &Path) -> Result<ExportManifest, Str
 }
 
 fn validate_manifest_for_packaging(manifest: &ExportManifest) -> Result<(), String> {
-    if manifest.format_version != 1 {
+    if manifest.format_version != 1 && manifest.format_version != 2 {
         return Err(format!(
-            "Unsupported format_version {}. Supported versions: [1]",
+            "Unsupported format_version {}. Supported versions: [1, 2]",
             manifest.format_version
         ));
     }
@@ -387,87 +373,46 @@ pub async fn export_sound_set(
         export_elements.push(e);
     }
 
-    // 4. Moods, Timelines, Tracks, Clips
+    // 4. Groups
     let mut stmt = conn
-        .prepare("SELECT id, name, description FROM moods WHERE sound_set_id = ?1")
+        .prepare("SELECT id, name FROM element_groups WHERE sound_set_id = ?1")
         .map_err(|e| e.to_string())?;
-    let moods_data: Vec<(i64, String, String)> = stmt
-        .query_map([sound_set_id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })
+    let groups_data: Vec<(i64, String)> = stmt
+        .query_map([sound_set_id], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|e| e.to_string())?
         .map(|r| r.unwrap())
         .collect();
 
-    let mut export_moods = Vec::new();
+    let mut export_groups = Vec::new();
 
-    for (mood_id, name, description) in moods_data {
-        let timeline = conn
-            .query_row(
-                "SELECT id, is_looping FROM timelines WHERE mood_id = ?1",
-                [&mood_id],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? != 0)),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
+    for (group_id, name) in groups_data {
+        let mut member_stmt = conn.prepare("SELECT audio_element_id, order_index FROM element_group_members WHERE group_id = ?1 ORDER BY order_index ASC").map_err(|e| e.to_string())?;
 
-        let export_timeline = if let Some((timeline_id, is_looping)) = timeline {
-            let mut t_stmt = conn.prepare("SELECT id, name, order_index FROM timeline_tracks WHERE timeline_id = ?1 ORDER BY order_index").map_err(|e| e.to_string())?;
-            let tracks_data: Vec<(i64, String, i64)> = t_stmt
-                .query_map([timeline_id], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        let members: Vec<ExportGroupMember> = member_stmt
+            .query_map([group_id], |row| {
+                let element_id: i64 = row.get(0)?;
+                let file_name = element_name_map
+                    .get(&element_id)
+                    .cloned()
+                    .unwrap_or_default();
+                Ok(ExportGroupMember {
+                    element_file_name: file_name,
+                    order_index: row.get(1)?,
                 })
-                .map_err(|e| e.to_string())?
-                .map(|r| r.unwrap())
-                .collect();
-
-            let mut export_tracks = Vec::new();
-            for (track_id, t_name, t_order) in tracks_data {
-                let mut clip_stmt = conn.prepare("SELECT audio_element_id, start_time_ms, duration_ms FROM timeline_elements WHERE track_id = ?1").map_err(|e| e.to_string())?;
-                let clips: Vec<ExportClip> = clip_stmt
-                    .query_map([track_id], |row| {
-                        let element_id: i64 = row.get(0)?;
-                        let file_name = element_name_map
-                            .get(&element_id)
-                            .cloned()
-                            .unwrap_or_default();
-                        Ok(ExportClip {
-                            element_file_name: file_name,
-                            start_time_ms: row.get(1)?,
-                            duration_ms: row.get(2)?,
-                        })
-                    })
-                    .map_err(|e| e.to_string())?
-                    .map(|r| r.unwrap())
-                    .collect();
-
-                export_tracks.push(ExportTrack {
-                    name: t_name,
-                    order_index: t_order,
-                    clips,
-                });
-            }
-            Some(ExportTimeline {
-                is_looping,
-                tracks: export_tracks,
             })
-        } else {
-            None
-        };
+            .map_err(|e| e.to_string())?
+            .map(|r| r.unwrap())
+            .collect();
 
-        export_moods.push(ExportMood {
-            name,
-            description,
-            timeline: export_timeline,
-        });
+        export_groups.push(ExportGroup { name, members });
     }
 
     let manifest = ExportManifest {
-        format_version: 1,
+        format_version: 2,
         soundset,
         channels: export_channels,
         elements: export_elements,
-        moods: export_moods,
+        groups: export_groups,
     };
 
     // 5. Create ZIP archive
@@ -599,36 +544,20 @@ pub async fn import_sound_set(app_handle: AppHandle, source_path: String) -> Res
         element_id_map.insert(element.file_name.clone(), tx.last_insert_rowid());
     }
 
-    for mood in manifest.moods {
+    for group in manifest.groups {
         tx.execute(
-            "INSERT INTO moods (sound_set_id, name, description) VALUES (?1, ?2, ?3)",
-            (sound_set_id, &mood.name, &mood.description),
+            "INSERT INTO element_groups (sound_set_id, name) VALUES (?1, ?2)",
+            (sound_set_id, &group.name),
         )
         .map_err(|e| e.to_string())?;
-        let mood_id = tx.last_insert_rowid();
+        let group_id = tx.last_insert_rowid();
 
-        if let Some(timeline) = mood.timeline {
-            tx.execute(
-                "INSERT INTO timelines (mood_id, name, order_index, is_looping) VALUES (?1, 'Timeline', 0, ?2)",
-                (mood_id, timeline.is_looping),
-            ).map_err(|e| e.to_string())?;
-            let timeline_id = tx.last_insert_rowid();
-
-            for track in timeline.tracks {
+        for member in group.members {
+            if let Some(&audio_element_id) = element_id_map.get(&member.element_file_name) {
                 tx.execute(
-                    "INSERT INTO timeline_tracks (timeline_id, name, order_index) VALUES (?1, ?2, ?3)",
-                    (timeline_id, &track.name, track.order_index),
+                    "INSERT INTO element_group_members (group_id, audio_element_id, order_index) VALUES (?1, ?2, ?3)",
+                    (group_id, audio_element_id, member.order_index),
                 ).map_err(|e| e.to_string())?;
-                let track_id = tx.last_insert_rowid();
-
-                for clip in track.clips {
-                    if let Some(&audio_element_id) = element_id_map.get(&clip.element_file_name) {
-                        tx.execute(
-                            "INSERT INTO timeline_elements (timeline_id, track_id, audio_element_id, start_time_ms, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
-                            (timeline_id, track_id, audio_element_id, clip.start_time_ms, clip.duration_ms),
-                        ).map_err(|e| e.to_string())?;
-                    }
-                }
             }
         }
     }
@@ -663,7 +592,7 @@ mod tests {
         fs::write(base.join("audio/wind.wav"), b"wind").expect("should write wind audio");
 
         let manifest = r#"{
-  "format_version": 1,
+  "format_version": 2,
   "soundset": { "name": "Forest Set", "description": "Nature ambience" },
   "channels": [],
   "elements": [
@@ -682,7 +611,7 @@ mod tests {
       "volume_db": -1.0
     }
   ],
-  "moods": []
+  "groups": []
 }"#;
         fs::write(base.join("manifest.json"), manifest).expect("should write manifest");
     }
@@ -719,7 +648,7 @@ mod tests {
 
         let manifest = read_manifest_from_zip(&mut archive)
             .expect("manifest should be readable by import logic");
-        assert_eq!(manifest.format_version, 1);
+        assert_eq!(manifest.format_version, 2);
     }
 
     #[test]
@@ -771,7 +700,7 @@ mod tests {
         fs::write(
             source.join("manifest.json"),
             r#"{
-  "format_version": 1,
+  "format_version": 2,
   "soundset": { "name": "Missing File", "description": "" },
   "channels": [],
   "elements": [
@@ -783,7 +712,7 @@ mod tests {
       "volume_db": 0.0
     }
   ],
-  "moods": []
+  "groups": []
 }"#,
         )
         .expect("should write manifest");
@@ -802,7 +731,7 @@ mod tests {
         fs::write(
             source.join("manifest.json"),
             r#"{
-  "format_version": 1,
+  "format_version": 2,
   "soundset": { "name": "Unsafe Path", "description": "" },
   "channels": [],
   "elements": [
@@ -814,7 +743,7 @@ mod tests {
       "volume_db": 0.0
     }
   ],
-  "moods": []
+  "groups": []
 }"#,
         )
         .expect("should write manifest");

@@ -15,6 +15,7 @@ pub struct SoundSet {
     pub id: i64,
     pub name: String,
     pub description: String,
+    pub is_enabled: bool,
     pub created_at: String,
 }
 
@@ -88,7 +89,6 @@ async fn update_app_settings(app_handle: AppHandle, settings: AppSettings) -> Re
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Mood {
     pub id: i64,
-    pub sound_set_id: i64,
     pub name: String,
     pub description: String,
     pub created_at: String,
@@ -161,6 +161,7 @@ pub struct TimelineElement {
     pub element_group_id: Option<i64>,
     pub start_time_ms: i64,
     pub duration_ms: i64,
+    pub is_available: bool,
 }
 
 fn get_db_path(app_handle: &AppHandle) -> PathBuf {
@@ -175,6 +176,7 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             description TEXT,
+            is_enabled INTEGER DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
         [],
@@ -183,11 +185,9 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS moods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sound_set_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (sound_set_id) REFERENCES sound_sets(id) ON DELETE CASCADE
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
         [],
     )?;
@@ -311,6 +311,53 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             [],
         )?;
         conn.execute("UPDATE audio_elements SET sound_set_id = (SELECT sound_set_id FROM moods WHERE moods.id = audio_elements.mood_id)", [])?;
+    }
+
+    // SoundSets migration for is_enabled
+    let mut stmt_ss = conn.prepare("PRAGMA table_info(sound_sets)")?;
+    let has_is_enabled = stmt_ss
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "is_enabled")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if !has_is_enabled {
+        conn.execute(
+            "ALTER TABLE sound_sets ADD COLUMN is_enabled INTEGER DEFAULT 1",
+            [],
+        )?;
+    }
+
+    // Mood global migration
+    let mut stmt_moods = conn.prepare("PRAGMA table_info(moods)")?;
+    let has_mood_sound_set_id = stmt_moods
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name == "sound_set_id")
+        })?
+        .any(|r| r.unwrap_or(false));
+
+    if has_mood_sound_set_id {
+        conn.execute("PRAGMA foreign_keys=off;", [])?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS moods_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "INSERT INTO moods_new (id, name, description, created_at)
+             SELECT id, name, description, created_at FROM moods",
+            [],
+        )?;
+        conn.execute("DROP TABLE moods", [])?;
+        conn.execute("ALTER TABLE moods_new RENAME TO moods", [])?;
+        conn.execute("PRAGMA foreign_keys=on;", [])?;
     }
 
     // Timelines migration for is_looping
@@ -596,6 +643,7 @@ async fn create_sound_set(
         id,
         name,
         description,
+        is_enabled: true,
         created_at: chrono::Local::now().to_rfc3339(),
     })
 }
@@ -607,7 +655,7 @@ async fn get_sound_sets(app_handle: AppHandle) -> Result<Vec<SoundSet>, String> 
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, description, created_at FROM sound_sets ORDER BY created_at DESC",
+            "SELECT id, name, description, is_enabled, created_at FROM sound_sets ORDER BY created_at DESC",
         )
         .map_err(|e| e.to_string())?;
 
@@ -617,7 +665,8 @@ async fn get_sound_sets(app_handle: AppHandle) -> Result<Vec<SoundSet>, String> 
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
-                created_at: row.get(3)?,
+                is_enabled: row.get(3)?,
+                created_at: row.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -638,9 +687,26 @@ async fn delete_sound_set(app_handle: AppHandle, id: i64) -> Result<(), String> 
 }
 
 #[tauri::command]
+async fn update_sound_set_enabled(
+    app_handle: AppHandle,
+    id: i64,
+    is_enabled: bool,
+) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE sound_sets SET is_enabled = ?1 WHERE id = ?2",
+        (&is_enabled, &id),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn create_mood(
     app_handle: AppHandle,
-    sound_set_id: i64,
     name: String,
     description: String,
 ) -> Result<Mood, String> {
@@ -648,8 +714,8 @@ async fn create_mood(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO moods (sound_set_id, name, description) VALUES (?1, ?2, ?3)",
-        [&sound_set_id.to_string(), &name, &description],
+        "INSERT INTO moods (name, description) VALUES (?1, ?2)",
+        [&name, &description],
     )
     .map_err(|e| e.to_string())?;
 
@@ -657,7 +723,6 @@ async fn create_mood(
 
     Ok(Mood {
         id,
-        sound_set_id,
         name,
         description,
         created_at: chrono::Local::now().to_rfc3339(),
@@ -665,22 +730,21 @@ async fn create_mood(
 }
 
 #[tauri::command]
-async fn get_moods(app_handle: AppHandle, sound_set_id: i64) -> Result<Vec<Mood>, String> {
+async fn get_moods(app_handle: AppHandle) -> Result<Vec<Mood>, String> {
     let db_path = get_db_path(&app_handle);
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, sound_set_id, name, description, created_at FROM moods WHERE sound_set_id = ?1 ORDER BY created_at DESC"
-    ).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, created_at FROM moods ORDER BY created_at DESC")
+        .map_err(|e| e.to_string())?;
 
     let moods = stmt
-        .query_map([sound_set_id], |row| {
+        .query_map([], |row| {
             Ok(Mood {
                 id: row.get(0)?,
-                sound_set_id: row.get(1)?,
-                name: row.get(2)?,
-                description: row.get(3)?,
-                created_at: row.get(4)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                created_at: row.get(3)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -763,6 +827,40 @@ async fn get_audio_elements(
 
     let elements = stmt
         .query_map([sound_set_id], |row| {
+            Ok(AudioElement {
+                id: row.get(0)?,
+                sound_set_id: row.get(1)?,
+                file_path: row.get(2)?,
+                file_name: row.get(3)?,
+                channel_type: row.get(4)?,
+                volume_db: row.get(5)?,
+                created_at: row.get(6)?,
+                channel_id: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let result: Result<Vec<_>, _> = elements.collect();
+    result.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_all_available_audio_elements(
+    app_handle: AppHandle,
+) -> Result<Vec<AudioElement>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT e.id, e.sound_set_id, e.file_path, e.file_name, e.channel_type, e.volume_db, e.created_at, e.channel_id 
+         FROM audio_elements e
+         LEFT JOIN sound_sets s ON e.sound_set_id = s.id
+         WHERE e.sound_set_id IS NULL OR s.is_enabled = 1
+         ORDER BY e.created_at DESC"
+    ).map_err(|e| e.to_string())?;
+
+    let elements = stmt
+        .query_map([], |row| {
             Ok(AudioElement {
                 id: row.get(0)?,
                 sound_set_id: row.get(1)?,
@@ -1097,6 +1195,7 @@ async fn add_element_to_track(
 
     let id = conn.last_insert_rowid();
 
+    // The created element is by definition from the selected library, so we assume it is available
     Ok(TimelineElement {
         id,
         track_id,
@@ -1104,6 +1203,7 @@ async fn add_element_to_track(
         element_group_id,
         start_time_ms,
         duration_ms,
+        is_available: true,
     })
 }
 
@@ -1116,7 +1216,23 @@ async fn get_track_elements(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
-        "SELECT id, track_id, audio_element_id, element_group_id, start_time_ms, duration_ms FROM timeline_elements WHERE track_id = ?1 ORDER BY start_time_ms ASC"
+        "
+        SELECT 
+            te.id, 
+            te.track_id, 
+            te.audio_element_id, 
+            te.element_group_id, 
+            te.start_time_ms, 
+            te.duration_ms,
+            COALESCE(
+                (SELECT ss.is_enabled FROM sound_sets ss JOIN audio_elements ae ON ae.sound_set_id = ss.id WHERE ae.id = te.audio_element_id),
+                (SELECT ss.is_enabled FROM sound_sets ss JOIN element_groups eg ON eg.sound_set_id = ss.id WHERE eg.id = te.element_group_id),
+                1
+            ) as is_available
+        FROM timeline_elements te 
+        WHERE te.track_id = ?1 
+        ORDER BY te.start_time_ms ASC
+        "
     ).map_err(|e| e.to_string())?;
 
     let elements = stmt
@@ -1128,6 +1244,7 @@ async fn get_track_elements(
                 element_group_id: row.get(3)?,
                 start_time_ms: row.get(4)?,
                 duration_ms: row.get(5)?,
+                is_available: row.get::<_, Option<bool>>(6)?.unwrap_or(true),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1540,6 +1657,39 @@ async fn get_element_groups(
 }
 
 #[tauri::command]
+async fn get_all_available_element_groups(
+    app_handle: AppHandle,
+) -> Result<Vec<ElementGroup>, String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT g.id, g.name, g.sound_set_id, g.created_at 
+         FROM element_groups g
+         LEFT JOIN sound_sets s ON g.sound_set_id = s.id
+         WHERE g.sound_set_id IS NULL OR s.is_enabled = 1
+         ORDER BY g.created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let groups = stmt
+        .query_map([], |row| {
+            Ok(ElementGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                sound_set_id: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(groups)
+}
+
+#[tauri::command]
 async fn add_element_to_group(
     app_handle: AppHandle,
     group_id: i64,
@@ -1629,12 +1779,14 @@ pub fn run() {
             seed_default_channels,
             create_sound_set,
             get_sound_sets,
+            update_sound_set_enabled,
             delete_sound_set,
             create_mood,
             get_moods,
             delete_mood,
             create_audio_element,
             get_audio_elements,
+            get_all_available_audio_elements,
             delete_audio_element,
             create_global_oneshot,
             get_global_oneshots,
@@ -1667,6 +1819,7 @@ pub fn run() {
             rename_element_group,
             delete_element_group,
             get_element_groups,
+            get_all_available_element_groups,
             add_element_to_group,
             remove_element_from_group,
         ])
@@ -1689,7 +1842,7 @@ mod tests {
 
     #[test]
     fn test_timeline_migration_singleton() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
 
         // Setup initial old schema without unique index
         conn.execute_batch(
@@ -1759,11 +1912,8 @@ mod tests {
         )
         .unwrap();
         conn.execute("INSERT INTO audio_elements (id, sound_set_id, file_path, file_name, channel_type) VALUES (100, 1, 'path', 'f', 'music')", []).unwrap();
-        conn.execute(
-            "INSERT INTO moods (id, sound_set_id, name) VALUES (1, 1, 'M')",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO moods (id, name) VALUES (1, 'M')", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO timelines (id, mood_id, name) VALUES (1, 1, 'T')",
             [],
@@ -1805,5 +1955,86 @@ mod tests {
 
         // 9. Different track overlap - OK
         assert!(!check_element_overlap(&conn, 6, 1500, 1000, None).unwrap());
+    }
+
+    #[test]
+    fn test_sound_set_activation_logic() {
+        let conn = Connection::open_in_memory().unwrap();
+        let _ = init_database(&conn).unwrap();
+
+        // 1. Setup SoundSet and AudioElement
+        conn.execute(
+            "INSERT INTO sound_sets (id, name, is_enabled) VALUES (1, 'S1', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sound_sets (id, name, is_enabled) VALUES (2, 'S2', 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("INSERT INTO audio_elements (id, sound_set_id, file_path, file_name, channel_type) VALUES (10, 1, 'p1', 'f1', 'music')", []).unwrap();
+        conn.execute("INSERT INTO audio_elements (id, sound_set_id, file_path, file_name, channel_type) VALUES (20, 2, 'p2', 'f2', 'music')", []).unwrap();
+
+        conn.execute(
+            "INSERT INTO element_groups (id, sound_set_id, name) VALUES (30, 1, 'g1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO element_groups (id, sound_set_id, name) VALUES (40, 2, 'g2')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("INSERT INTO moods (id, name) VALUES (1, 'M')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO timelines (id, mood_id, name) VALUES (1, 1, 'T')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO timeline_tracks (id, timeline_id, name) VALUES (1, 1, 'Trk')",
+            [],
+        )
+        .unwrap();
+
+        // Add elements to timeline
+        conn.execute("INSERT INTO timeline_elements (id, track_id, audio_element_id, start_time_ms, duration_ms) VALUES (1, 1, 10, 0, 1000)", []).unwrap();
+        conn.execute("INSERT INTO timeline_elements (id, track_id, audio_element_id, start_time_ms, duration_ms) VALUES (2, 1, 20, 1000, 1000)", []).unwrap();
+        conn.execute("INSERT INTO timeline_elements (id, track_id, element_group_id, start_time_ms, duration_ms) VALUES (3, 1, 30, 2000, 1000)", []).unwrap();
+        conn.execute("INSERT INTO timeline_elements (id, track_id, element_group_id, start_time_ms, duration_ms) VALUES (4, 1, 40, 3000, 1000)", []).unwrap();
+
+        // Verify get_track_elements availability
+        let mut stmt = conn.prepare("
+            SELECT id, is_available FROM (
+                SELECT 
+                    te.id, 
+                    COALESCE(
+                        (SELECT ss.is_enabled FROM sound_sets ss JOIN audio_elements ae ON ae.sound_set_id = ss.id WHERE ae.id = te.audio_element_id),
+                        (SELECT ss.is_enabled FROM sound_sets ss JOIN element_groups eg ON eg.sound_set_id = ss.id WHERE eg.id = te.element_group_id),
+                        1
+                    ) as is_available
+                FROM timeline_elements te 
+                WHERE te.track_id = 1
+            )
+        ").unwrap();
+
+        let results: Vec<(i64, bool)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i32>(1)? != 0)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        // Element 1 (S1 enabled) -> true
+        assert!(results.iter().find(|(id, _)| *id == 1).unwrap().1);
+        // Element 2 (S2 disabled) -> false
+        assert!(!results.iter().find(|(id, _)| *id == 2).unwrap().1);
+        // Element 3 (Group S1 enabled) -> true
+        assert!(results.iter().find(|(id, _)| *id == 3).unwrap().1);
+        // Element 4 (Group S2 disabled) -> false
+        assert!(!results.iter().find(|(id, _)| *id == 4).unwrap().1);
     }
 }

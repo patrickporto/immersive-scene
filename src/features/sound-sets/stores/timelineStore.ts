@@ -26,6 +26,7 @@ export interface TimelineElement {
   element_group_id: number | null;
   start_time_ms: number;
   duration_ms: number;
+  is_available: boolean;
 }
 
 interface TimelineElementLike {
@@ -35,11 +36,13 @@ interface TimelineElementLike {
   element_group_id?: number | null;
   start_time_ms?: number;
   duration_ms?: number;
+  is_available?: boolean;
   trackId?: number;
   audioElementId?: number | null;
   elementGroupId?: number | null;
   startTimeMs?: number;
   durationMs?: number;
+  isAvailable?: boolean;
 }
 
 const normalizeTimelineElement = (element: TimelineElementLike): TimelineElement => ({
@@ -55,6 +58,7 @@ const normalizeTimelineElement = (element: TimelineElementLike): TimelineElement
       : null,
   start_time_ms: Number(element.start_time_ms ?? element.startTimeMs) || 0,
   duration_ms: Number(element.duration_ms ?? element.durationMs) || 0,
+  is_available: element.is_available ?? element.isAvailable ?? true,
 });
 
 interface TimelineState {

@@ -92,7 +92,7 @@ pub async fn discord_disconnect() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn discord_send_audio(pcm_data: Vec<f32>) -> Result<(), String> {
+pub async fn discord_send_audio(_pcm_data: Vec<f32>) -> Result<(), String> {
     // Stub: feed audio to the songbird track
     Ok(())
 }

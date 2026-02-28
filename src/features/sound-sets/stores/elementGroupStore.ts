@@ -21,7 +21,7 @@ interface ElementGroupState {
   isLoading: boolean;
   error: string | null;
 
-  loadGroups: (soundSetId?: number | null) => Promise<void>;
+  loadGroups: () => Promise<void>;
   createGroup: (name: string, soundSetId?: number | null) => Promise<ElementGroup | null>;
   renameGroup: (id: number, name: string) => Promise<void>;
   deleteGroup: (id: number) => Promise<void>;
@@ -37,20 +37,11 @@ export const useElementGroupStore = create<ElementGroupState>(set => ({
   isLoading: false,
   error: null,
 
-  loadGroups: async soundSetId => {
+  loadGroups: async () => {
     set({ isLoading: true, error: null });
     try {
-      const fetchedGroups = await invoke<ElementGroup[]>('get_element_groups', { soundSetId });
-      set(state => {
-        if (soundSetId) {
-          const globals = state.groups.filter(g => g.sound_set_id === null);
-          // Filter out any other soundSet's groups just to be clean, or keep them if you want
-          return { groups: [...globals, ...fetchedGroups], isLoading: false };
-        } else {
-          const soundSetGroups = state.groups.filter(g => g.sound_set_id !== null);
-          return { groups: [...soundSetGroups, ...fetchedGroups], isLoading: false };
-        }
-      });
+      const groups = await invoke<ElementGroup[]>('get_all_available_element_groups');
+      set({ groups, isLoading: false });
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }

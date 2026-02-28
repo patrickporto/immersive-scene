@@ -27,9 +27,11 @@ interface AudioElementCardProps {
 export function AudioElementCard({ element, mode, isCombineTarget }: AudioElementCardProps) {
   const { play, pause, stop, sources, toggleLoop, selectedElementId, setSelectedElementId } =
     useAudioEngineStore();
-  const { deleteAudioElement, loadAudioElements, selectedMood } = useSoundSetStore();
+  const { deleteAudioElement, loadAudioElements, selectedMood, soundSets } = useSoundSetStore();
   const { channels, setChannelVolume } = useMixerStore();
   const { success, error } = useToast();
+
+  const sourceSoundSet = soundSets.find(s => s.id === element.sound_set_id);
 
   const source = sources.get(element.id);
   const isPlaying = source?.isPlaying || false;
@@ -50,7 +52,7 @@ export function AudioElementCard({ element, mode, isCombineTarget }: AudioElemen
       await deleteAudioElement(element.id);
 
       if (selectedMood) {
-        await loadAudioElements(selectedMood.id);
+        await loadAudioElements();
       }
 
       success(`${mode === 'one-shot' ? 'One-shot' : 'Element'} "${element.file_name}" removed`);
@@ -157,6 +159,15 @@ export function AudioElementCard({ element, mode, isCombineTarget }: AudioElemen
               {isLooping ? 'Loop' : '1-Shot'}
             </span>
           </motion.button>
+
+          {sourceSoundSet && (
+            <span
+              className="text-[8px] font-bold text-gray-500 uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/40 border border-white/10 shrink-0 truncate max-w-[80px]"
+              title={`Source: ${sourceSoundSet.name}`}
+            >
+              {sourceSoundSet.name}
+            </span>
+          )}
 
           <button
             onClick={event => {

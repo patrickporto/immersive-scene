@@ -5,6 +5,7 @@ export interface SoundSet {
   id: number;
   name: string;
   description: string;
+  is_enabled: boolean;
   created_at: string;
 }
 
@@ -43,6 +44,7 @@ interface SoundSetState {
   audioElements: AudioElement[];
   channels: AudioChannel[];
   selectedSoundSet: SoundSet | null;
+  selectedSoundSetIds: number[];
   selectedMood: Mood | null;
   isLoading: boolean;
   error: string | null;
@@ -52,13 +54,15 @@ interface SoundSetState {
   createSoundSet: (name: string, description: string) => Promise<void>;
   deleteSoundSet: (id: number) => Promise<void>;
   selectSoundSet: (soundSet: SoundSet | null) => void;
+  toggleSoundSetSelection: (id: number) => void;
+  toggleSoundSetEnabled: (id: number, isEnabled: boolean) => Promise<void>;
 
-  loadMoods: (soundSetId: number) => Promise<void>;
-  createMood: (soundSetId: number, name: string, description: string) => Promise<void>;
+  loadMoods: () => Promise<void>;
+  createMood: (name: string, description: string) => Promise<void>;
   deleteMood: (id: number) => Promise<void>;
   selectMood: (mood: Mood | null) => void;
 
-  loadAudioElements: (soundSetId: number) => Promise<void>;
+  loadAudioElements: () => Promise<void>;
   createAudioElement: (
     soundSetId: number,
     filePath: string,
@@ -89,6 +93,7 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
   audioElements: [],
   channels: [],
   selectedSoundSet: null,
+  selectedSoundSetIds: [],
   selectedMood: null,
   isLoading: false,
   error: null,
@@ -100,6 +105,9 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
       const soundSets = await invoke<SoundSet[]>('get_sound_sets');
       console.log('Store: Loaded', soundSets.length, 'soundsets');
       set({ soundSets, isLoading: false });
+
+      // Load global assets
+      get().loadMoods();
     } catch (error) {
       console.error('Store: Failed to load soundsets:', error);
       set({ error: String(error), isLoading: false });
@@ -117,6 +125,7 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
         soundSets: [newSoundSet, ...state.soundSets],
         isLoading: false,
       }));
+      await get().seedDefaultChannels(newSoundSet.id);
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }
@@ -129,8 +138,22 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
       set(state => ({
         soundSets: state.soundSets.filter(ss => ss.id !== id),
         selectedSoundSet: state.selectedSoundSet?.id === id ? null : state.selectedSoundSet,
-        moods: state.selectedSoundSet?.id === id ? [] : state.moods,
-        selectedMood: state.selectedSoundSet?.id === id ? null : state.selectedMood,
+        selectedSoundSetIds: state.selectedSoundSetIds.filter(selectedId => selectedId !== id),
+        isLoading: false,
+      }));
+    } catch (error) {
+      set({ error: String(error), isLoading: false });
+    }
+  },
+
+  toggleSoundSetEnabled: async (id, isEnabled) => {
+    set({ isLoading: true, error: null });
+    try {
+      await invoke('update_sound_set_enabled', { id, isEnabled });
+      set(state => ({
+        soundSets: state.soundSets.map(ss =>
+          ss.id === id ? { ...ss, is_enabled: isEnabled } : ss
+        ),
         isLoading: false,
       }));
     } catch (error) {
@@ -139,35 +162,61 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
   },
 
   selectSoundSet: soundSet => {
-    set({
-      selectedSoundSet: soundSet,
-      moods: [],
-      selectedMood: null,
-      audioElements: [],
-      channels: [],
-    });
-    if (soundSet) {
-      get().loadMoods(soundSet.id);
-      get().loadAudioElements(soundSet.id);
-      get().loadChannels(soundSet.id);
+    if (!soundSet) {
+      set({
+        selectedSoundSet: null,
+        selectedSoundSetIds: [],
+        audioElements: [],
+        channels: [],
+      });
+      return;
     }
+
+    set(state => {
+      const isAlreadyVisible = state.selectedSoundSetIds.includes(soundSet.id);
+      return {
+        selectedSoundSet: soundSet,
+        selectedSoundSetIds: isAlreadyVisible
+          ? state.selectedSoundSetIds
+          : [...state.selectedSoundSetIds, soundSet.id],
+      };
+    });
+
+    // Always refresh elements and primary channels
+    get().loadAudioElements();
+    get().loadChannels(soundSet.id);
   },
 
-  loadMoods: async soundSetId => {
+  toggleSoundSetSelection: id => {
+    set(state => {
+      const isVisible = state.selectedSoundSetIds.includes(id);
+      const nextIds = isVisible
+        ? state.selectedSoundSetIds.filter(selectedId => selectedId !== id)
+        : [...state.selectedSoundSetIds, id];
+
+      return {
+        selectedSoundSetIds: nextIds,
+        // If we unselect the primary one, clear it or pick another from visible?
+        // Let's keep it simple: unselecting doesn't necessarily deselect primary unless we want to.
+      };
+    });
+    get().loadAudioElements();
+  },
+
+  loadMoods: async () => {
     set({ isLoading: true, error: null });
     try {
-      const moods = await invoke<Mood[]>('get_moods', { soundSetId });
+      const moods = await invoke<Mood[]>('get_moods');
       set({ moods, isLoading: false });
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }
   },
 
-  createMood: async (soundSetId, name, description) => {
+  createMood: async (name, description) => {
     set({ isLoading: true, error: null });
     try {
       const newMood = await invoke<Mood>('create_mood', {
-        soundSetId,
         name,
         description,
       });
@@ -175,7 +224,6 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
         moods: [newMood, ...state.moods],
         isLoading: false,
       }));
-      await get().seedDefaultChannels(soundSetId);
     } catch (error) {
       set({ error: String(error), isLoading: false });
     }
@@ -199,10 +247,10 @@ export const useSoundSetStore = create<SoundSetState>((set, get) => ({
     set({ selectedMood: mood });
   },
 
-  loadAudioElements: async soundSetId => {
+  loadAudioElements: async () => {
     set({ isLoading: true, error: null });
     try {
-      const audioElements = await invoke<AudioElement[]>('get_audio_elements', { soundSetId });
+      const audioElements = await invoke<AudioElement[]>('get_all_available_audio_elements');
       set({ audioElements, isLoading: false });
     } catch (error) {
       set({ error: String(error), isLoading: false });

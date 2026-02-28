@@ -131,4 +131,49 @@ describe('soundSetStore', () => {
       });
     });
   });
+
+  describe('SoundSet Activation', () => {
+    it('toggleSoundSetEnabled updates the state and calls the backend', async () => {
+      useSoundSetStore.setState({
+        soundSets: [{ id: 1, name: 'S1', description: 'D1', is_enabled: true, created_at: '' }],
+      });
+
+      vi.mocked(invoke).mockResolvedValueOnce(null);
+
+      await useSoundSetStore.getState().toggleSoundSetEnabled(1, false);
+
+      const state = useSoundSetStore.getState();
+      expect(state.soundSets[0].is_enabled).toBe(false);
+      expect(invoke).toHaveBeenCalledWith('update_sound_set_enabled', { id: 1, isEnabled: false });
+    });
+  });
+
+  describe('Global Moods', () => {
+    it('loadMoods fetches all moods without soundSetId', async () => {
+      const mockMoods = [{ id: 10, name: 'M1', description: 'D1', created_at: '' }];
+      vi.mocked(invoke).mockResolvedValueOnce(mockMoods);
+
+      await useSoundSetStore.getState().loadMoods();
+
+      const state = useSoundSetStore.getState();
+      expect(state.moods).toHaveLength(1);
+      expect(state.moods[0].name).toBe('M1');
+      expect(invoke).toHaveBeenCalledWith('get_moods');
+    });
+
+    it('createMood calls backend without soundSetId', async () => {
+      const mockMood = { id: 11, name: 'New Mood', description: 'New Desc', created_at: '' };
+      vi.mocked(invoke).mockResolvedValueOnce(mockMood);
+
+      await useSoundSetStore.getState().createMood('New Mood', 'New Desc');
+
+      const state = useSoundSetStore.getState();
+      expect(state.moods).toHaveLength(1);
+      expect(state.moods[0].name).toBe('New Mood');
+      expect(invoke).toHaveBeenCalledWith('create_mood', {
+        name: 'New Mood',
+        description: 'New Desc',
+      });
+    });
+  });
 });
