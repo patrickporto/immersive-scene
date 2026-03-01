@@ -2,7 +2,16 @@ import React, { useEffect, useState } from 'react';
 
 import { open } from '@tauri-apps/plugin-dialog';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, CheckCircle2, Database, FolderOpen, Info, Shield, Volume2 } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  Database,
+  FolderOpen,
+  Info,
+  Lightbulb,
+  Shield,
+  Volume2,
+} from 'lucide-react';
 
 import { DiscordSettingsSection } from './DiscordSettingsSection';
 import { Modal } from '../../../shared/components/Modal';
@@ -16,16 +25,33 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SettingsTab = 'audio' | 'discord' | 'storage' | 'about';
+type SettingsTab = 'audio' | 'discord' | 'qlc' | 'storage' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const { settings, updateSettings, loadSettings, isLoading, error, clearError } =
-    useSettingsStore();
+  const {
+    settings,
+    qlcHealth,
+    updateSettings,
+    loadSettings,
+    testQlcConnection,
+    isLoading,
+    error,
+    clearError,
+  } = useSettingsStore();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('audio');
   const [localStrategy, setLocalStrategy] = useState(settings.audio_file_strategy);
   const [localLibraryPath, setLocalLibraryPath] = useState(settings.library_path);
   const [localOutputDeviceId, setLocalOutputDeviceId] = useState(settings.output_device_id);
+  const [localQlcEndpoint, setLocalQlcEndpoint] = useState(settings.qlc_endpoint);
+  const [localQlcAuthMode, setLocalQlcAuthMode] = useState(settings.qlc_auth_mode);
+  const [localQlcAuthToken, setLocalQlcAuthToken] = useState(settings.qlc_auth_token);
+  const [localQlcTimeoutMs, setLocalQlcTimeoutMs] = useState(settings.qlc_request_timeout_ms);
+  const [localQlcReconnectPolicy, setLocalQlcReconnectPolicy] = useState(
+    settings.qlc_reconnect_policy
+  );
+  const [localQlcStopBehavior, setLocalQlcStopBehavior] = useState(settings.qlc_stop_behavior);
+  const [localQlcEnabled, setLocalQlcEnabled] = useState(settings.qlc_enabled);
 
   const { devices } = useAudioDevices();
   const {
@@ -43,6 +69,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setLocalStrategy(settings.audio_file_strategy);
         setLocalLibraryPath(settings.library_path);
         setLocalOutputDeviceId(settings.output_device_id);
+        setLocalQlcEndpoint(settings.qlc_endpoint);
+        setLocalQlcAuthMode(settings.qlc_auth_mode);
+        setLocalQlcAuthToken(settings.qlc_auth_token);
+        setLocalQlcTimeoutMs(settings.qlc_request_timeout_ms);
+        setLocalQlcReconnectPolicy(settings.qlc_reconnect_policy);
+        setLocalQlcStopBehavior(settings.qlc_stop_behavior);
+        setLocalQlcEnabled(settings.qlc_enabled);
       });
     }
   }, [
@@ -51,6 +84,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     settings.audio_file_strategy,
     settings.library_path,
     settings.output_device_id,
+    settings.qlc_endpoint,
+    settings.qlc_auth_mode,
+    settings.qlc_auth_token,
+    settings.qlc_request_timeout_ms,
+    settings.qlc_reconnect_policy,
+    settings.qlc_stop_behavior,
+    settings.qlc_enabled,
   ]);
 
   const handleSave = async () => {
@@ -59,6 +99,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       audio_file_strategy: localStrategy,
       library_path: localLibraryPath,
       output_device_id: localOutputDeviceId,
+      qlc_endpoint: localQlcEndpoint,
+      qlc_transport: 'rest',
+      qlc_auth_mode: localQlcAuthMode,
+      qlc_auth_token: localQlcAuthToken,
+      qlc_request_timeout_ms: localQlcTimeoutMs,
+      qlc_reconnect_policy: localQlcReconnectPolicy,
+      qlc_stop_behavior: localQlcStopBehavior,
+      qlc_enabled: localQlcEnabled,
     });
 
     useAudioEngineStore.getState().setOutputDevice(localOutputDeviceId).catch(console.error);
@@ -84,6 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const tabs = [
     { id: 'audio', label: 'Audio', icon: Volume2 },
     { id: 'discord', label: 'Discord', icon: Shield },
+    { id: 'qlc', label: 'QLC+', icon: Lightbulb },
     { id: 'storage', label: 'Storage', icon: Database },
     { id: 'about', label: 'About', icon: Info },
   ] as const;
@@ -205,6 +254,154 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 {activeTab === 'discord' && (
                   <div className="space-y-6">
                     <DiscordSettingsSection />
+                  </div>
+                )}
+
+                {activeTab === 'qlc' && (
+                  <div className="space-y-8">
+                    <section className="space-y-4">
+                      <label className="text-sm font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                        Endpoint
+                      </label>
+                      <input
+                        type="url"
+                        value={localQlcEndpoint}
+                        onChange={e => setLocalQlcEndpoint(e.target.value)}
+                        placeholder="http://localhost:9999/api"
+                        className="w-full bg-zinc-900 border border-white/5 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all"
+                      />
+                    </section>
+
+                    <section className="space-y-4">
+                      <label className="text-sm font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                        Authentication
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        {(['none', 'token'] as const).map(mode => (
+                          <button
+                            key={mode}
+                            onClick={() => setLocalQlcAuthMode(mode)}
+                            className={`p-4 rounded-xl border text-sm font-semibold transition-all ${
+                              localQlcAuthMode === mode
+                                ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-300'
+                                : 'bg-zinc-900/50 border-white/5 text-zinc-400 hover:text-zinc-200'
+                            }`}
+                          >
+                            {mode === 'none' ? 'No Auth' : 'Token'}
+                          </button>
+                        ))}
+                      </div>
+                      {localQlcAuthMode === 'token' && (
+                        <input
+                          type="password"
+                          value={localQlcAuthToken}
+                          onChange={e => setLocalQlcAuthToken(e.target.value)}
+                          placeholder="QLC+ API token"
+                          className="w-full bg-zinc-900 border border-white/5 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all"
+                        />
+                      )}
+                    </section>
+
+                    <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                          Timeout (ms)
+                        </label>
+                        <input
+                          type="number"
+                          min={500}
+                          max={30000}
+                          step={100}
+                          value={localQlcTimeoutMs}
+                          onChange={e => setLocalQlcTimeoutMs(Number(e.target.value) || 5000)}
+                          className="w-full bg-zinc-900 border border-white/5 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                          Reconnect
+                        </label>
+                        <select
+                          value={localQlcReconnectPolicy}
+                          onChange={e =>
+                            setLocalQlcReconnectPolicy(
+                              e.target.value as 'off' | 'retry-once' | 'auto'
+                            )
+                          }
+                          className="w-full bg-zinc-900 border border-white/5 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all"
+                        >
+                          <option value="off">Off</option>
+                          <option value="retry-once">Retry Once</option>
+                          <option value="auto">Auto (3 tries)</option>
+                        </select>
+                      </div>
+                    </section>
+
+                    <section className="space-y-2">
+                      <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider px-1">
+                        Stop Behavior
+                      </label>
+                      <select
+                        value={localQlcStopBehavior}
+                        onChange={e =>
+                          setLocalQlcStopBehavior(e.target.value as 'stop-run-cues' | 'panic')
+                        }
+                        className="w-full bg-zinc-900 border border-white/5 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500 transition-all"
+                      >
+                        <option value="stop-run-cues">Stop Run Cues</option>
+                        <option value="panic">Global Panic</option>
+                      </select>
+                    </section>
+
+                    <section className="p-6 rounded-3xl bg-zinc-900/50 border border-white/5 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="text-sm font-bold text-zinc-200">
+                            Enable QLC+ Integration
+                          </label>
+                          <p className="text-xs text-zinc-500 mt-1">
+                            Show QLC+ controls in the right sidebar.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setLocalQlcEnabled(!localQlcEnabled)}
+                          className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none ${
+                            localQlcEnabled ? 'bg-cyan-500' : 'bg-zinc-700'
+                          }`}
+                        >
+                          <motion.div
+                            animate={{ x: localQlcEnabled ? 26 : 2 }}
+                            transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                            className="absolute top-1 left-0 w-4 h-4 bg-white rounded-full shadow-sm"
+                          />
+                        </button>
+                      </div>
+                    </section>
+
+                    <section className="space-y-3">
+                      <button
+                        onClick={() => void testQlcConnection()}
+                        className="px-5 py-3 rounded-2xl bg-cyan-500 text-zinc-950 text-sm font-bold hover:bg-cyan-400 transition-all active:scale-95"
+                      >
+                        Test QLC+ Connection
+                      </button>
+
+                      {qlcHealth && (
+                        <div
+                          className={`text-xs rounded-xl border px-4 py-3 ${
+                            qlcHealth.healthy
+                              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                              : 'bg-red-500/10 border-red-500/40 text-red-300'
+                          }`}
+                        >
+                          {qlcHealth.message}
+                          {qlcHealth.error_code && (
+                            <span className="ml-2 opacity-70">({qlcHealth.error_code})</span>
+                          )}
+                        </div>
+                      )}
+                    </section>
                   </div>
                 )}
 

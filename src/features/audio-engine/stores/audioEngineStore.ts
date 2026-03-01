@@ -51,6 +51,59 @@ interface TransportLatencySamples {
   stop: number[];
 }
 
+const RESUME_LOOP_BATCH_SIZE = 12;
+const FRAME_WORK_BUDGET_MS = 6;
+
+type PauseResumeTransition = 'idle' | 'pausing' | 'resuming';
+
+const runOnNextFrame = (callback: () => void) => {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => callback());
+    return;
+  }
+
+  globalThis.setTimeout(callback, 0);
+};
+
+const processInAnimationFrames = async <T>(
+  items: T[],
+  processor: (item: T) => void,
+  shouldAbort: () => boolean
+) => {
+  let index = 0;
+
+  while (index < items.length) {
+    if (shouldAbort()) {
+      return false;
+    }
+
+    await new Promise<void>(resolve => {
+      runOnNextFrame(() => {
+        const frameStart = performance.now();
+        let processedCount = 0;
+
+        while (index < items.length) {
+          processor(items[index]);
+          index += 1;
+          processedCount += 1;
+
+          if (processedCount >= RESUME_LOOP_BATCH_SIZE) {
+            break;
+          }
+
+          if (performance.now() - frameStart >= FRAME_WORK_BUDGET_MS) {
+            break;
+          }
+        }
+
+        resolve();
+      });
+    });
+  }
+
+  return true;
+};
+
 interface AudioEngineState {
   audioContext: AudioContext | null;
   globalGainNode: GainNode | null;
@@ -92,6 +145,10 @@ interface AudioEngineState {
   transportLastAppliedByElement: Map<number, number>;
   transportLatencySamples: TransportLatencySamples;
   transportQueueHighWatermark: number;
+  isEverythingPaused: boolean;
+  pausedElementsOffset: Map<number, number>;
+  pauseResumeTargetState: 'paused' | 'running' | null;
+  pauseResumeTransition: PauseResumeTransition;
 
   setOutputDevice: (deviceId: string) => Promise<void>;
   cleanup: () => void;
@@ -99,13 +156,45 @@ interface AudioEngineState {
   pauseTimeline: () => Promise<void>;
   resumeTimeline: () => Promise<void>;
   setTimelineLoopEnabled: (isEnabled: boolean) => void;
-  crossfadeToTimeline: (
+  pauseAll: () => Promise<void>;
+  resumeAll: () => Promise<void>;
+  startTimeline: (
     timelineElements: {
+      id?: number;
       track_id: number;
       audio_element_id: number | null;
       element_group_id: number | null;
       start_time_ms: number;
       duration_ms: number;
+      cue_type?: 'audio' | 'qlc';
+      qlc_function_id?: string | null;
+      qlc_action?: string | null;
+      qlc_param_name?: string | null;
+      qlc_param_value?: number | null;
+      cue_label?: string | null;
+      cue_notes?: string | null;
+      cue_tags?: string | null;
+    }[],
+    tracks: { id: number; is_looping: boolean }[],
+    isLooping?: boolean,
+    context?: PlaybackContext
+  ) => void;
+  crossfadeToTimeline: (
+    timelineElements: {
+      id?: number;
+      track_id: number;
+      audio_element_id: number | null;
+      element_group_id: number | null;
+      start_time_ms: number;
+      duration_ms: number;
+      cue_type?: 'audio' | 'qlc';
+      qlc_function_id?: string | null;
+      qlc_action?: string | null;
+      qlc_param_name?: string | null;
+      qlc_param_value?: number | null;
+      cue_label?: string | null;
+      cue_notes?: string | null;
+      cue_tags?: string | null;
     }[],
     tracks: { id: number; is_looping: boolean }[],
     isLooping?: boolean,
@@ -117,6 +206,8 @@ interface AudioEngineState {
     playDurationMs: number,
     fadeInDuration?: number
   ) => Promise<void>;
+  activeQlcCueTimeouts: number[];
+  activeQlcRunFunctionIds: Set<string>;
 }
 
 export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
@@ -147,6 +238,12 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   transportLastAppliedByElement: new Map(),
   transportLatencySamples: { start: [], pause: [], stop: [] },
   transportQueueHighWatermark: 0,
+  isEverythingPaused: false,
+  pausedElementsOffset: new Map(),
+  pauseResumeTargetState: null,
+  pauseResumeTransition: 'idle',
+  activeQlcCueTimeouts: [],
+  activeQlcRunFunctionIds: new Set(),
 
   setSelectedElementId: id => set({ selectedElementId: id }),
 
@@ -581,9 +678,19 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   stopAll: () => {
-    const { sources, activeTrackTimeouts } = get();
+    const { sources, activeTrackTimeouts, activeQlcCueTimeouts, activeQlcRunFunctionIds } = get();
     activeTrackTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    activeQlcCueTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
     set({ activeTrackTimeouts: new Map() });
+
+    const qlcStopBehavior = useSettingsStore.getState().settings.qlc_stop_behavior;
+    if (qlcStopBehavior === 'panic') {
+      invoke('qlc_panic').catch(console.error);
+    } else {
+      activeQlcRunFunctionIds.forEach(functionId => {
+        invoke('qlc_stop_function', { functionId }).catch(console.error);
+      });
+    }
 
     sources.forEach(source => {
       if (source.sourceNode) {
@@ -610,10 +717,17 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       isTimelinePlaying: false,
       isTimelinePaused: false,
       timelineStartTimeContext: null,
+      timelinePauseTimeContext: null,
       isTimelineLoopEnabled: false,
       activePlaybackContext: null,
       transportCommandQueue: [],
       isTransportProcessingScheduled: false,
+      isEverythingPaused: false,
+      pausedElementsOffset: new Map(),
+      pauseResumeTargetState: null,
+      pauseResumeTransition: 'idle',
+      activeQlcCueTimeouts: [],
+      activeQlcRunFunctionIds: new Set(),
     });
   },
 
@@ -769,6 +883,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       audioContext,
       sources,
       activeTrackTimeouts,
+      activeQlcCueTimeouts,
       globalGainNode,
       channelNodes,
       discordCaptureNode,
@@ -777,6 +892,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     } = get();
 
     activeTrackTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    activeQlcCueTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
     set({ activeTrackTimeouts: new Map() });
 
     if (discordConnectionCheckInterval !== null) {
@@ -832,6 +948,8 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       isTimelinePlaying: false,
       isTimelinePaused: false,
       timelineStartTimeContext: null,
+      timelinePauseTimeContext: null,
+      timelineDurationMs: 60000,
       isTimelineLoopEnabled: false,
       activePlaybackContext: null,
       transportCommandQueue: [],
@@ -840,6 +958,12 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       transportLastAppliedByElement: new Map(),
       transportLatencySamples: { start: [], pause: [], stop: [] },
       transportQueueHighWatermark: 0,
+      isEverythingPaused: false,
+      pausedElementsOffset: new Map(),
+      pauseResumeTargetState: null,
+      pauseResumeTransition: 'idle',
+      activeQlcCueTimeouts: [],
+      activeQlcRunFunctionIds: new Set(),
     });
   },
 
@@ -891,26 +1015,10 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     } = get();
     if (audioContext && isTimelinePlaying && isTimelinePaused) {
       try {
+        // Resume audio context first - this is the critical operation
         await audioContext.resume();
 
-        // Reconnect Discord capture node after resuming
-        if (
-          discordCaptureNode &&
-          discordSilentGainNode &&
-          globalGainNode &&
-          useSettingsStore.getState().settings.output_device_id === 'discord'
-        ) {
-          try {
-            globalGainNode.connect(discordCaptureNode);
-            discordCaptureNode.connect(discordSilentGainNode);
-            discordSilentGainNode.connect(audioContext.destination);
-          } catch (e) {
-            console.warn('Failed to reconnect Discord capture node:', e);
-          }
-        }
-
-        // Adjust timeline start time to compensate for the paused duration
-        // This ensures the timeline continues from where it left off
+        // Update state immediately for fast UI feedback
         let newStartTimeContext = timelineStartTimeContext;
         if (timelineStartTimeContext !== null && timelinePauseTimeContext !== null) {
           const pausedDuration = audioContext.currentTime - timelinePauseTimeContext;
@@ -923,6 +1031,26 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
           timelineStartTimeContext: newStartTimeContext,
           timelinePauseTimeContext: null,
         });
+
+        // Reconnect Discord capture node asynchronously (non-blocking)
+        // This can be slow due to AudioWorklet initialization, so do it after UI update
+        if (
+          discordCaptureNode &&
+          discordSilentGainNode &&
+          globalGainNode &&
+          useSettingsStore.getState().settings.output_device_id === 'discord'
+        ) {
+          // Use setTimeout to defer this operation and not block the UI
+          setTimeout(() => {
+            try {
+              globalGainNode.connect(discordCaptureNode);
+              discordCaptureNode.connect(discordSilentGainNode);
+              discordSilentGainNode.connect(audioContext.destination);
+            } catch (e) {
+              console.warn('Failed to reconnect Discord capture node:', e);
+            }
+          }, 0);
+        }
       } catch (error) {
         console.error('Failed to resume timeline:', error);
       }
@@ -937,6 +1065,210 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     set({
       isTimelineLoopEnabled: isEnabled,
     });
+  },
+
+  pauseAll: async () => {
+    const { audioContext, isEverythingPaused, sources, pauseResumeTransition } = get();
+
+    if (!audioContext || isEverythingPaused) return;
+
+    if (pauseResumeTransition === 'resuming') {
+      set({ pauseResumeTargetState: 'paused' });
+      return;
+    }
+
+    if (pauseResumeTransition === 'pausing') {
+      return;
+    }
+
+    set({
+      pauseResumeTargetState: 'paused',
+      pauseResumeTransition: 'pausing',
+    });
+
+    try {
+      // Disconnect Discord capture path before suspend to avoid blocking pause operation
+      const { discordCaptureNode, discordSilentGainNode } = get();
+      if (discordCaptureNode && discordSilentGainNode) {
+        try {
+          discordCaptureNode.disconnect();
+          discordSilentGainNode.disconnect();
+        } catch {
+          // Ignore disconnect errors
+        }
+      }
+
+      // Suspend audio context FIRST - this pauses everything immediately
+      // This is the most critical operation and must happen fast
+      const pauseTime = audioContext.currentTime;
+      await audioContext.suspend();
+
+      // Update timeline state immediately
+      const state = get();
+      if (state.isTimelinePlaying && !state.isTimelinePaused) {
+        set({
+          isTimelinePaused: true,
+          timelinePauseTimeContext: pauseTime,
+        });
+      }
+
+      // Calculate offsets for looping elements (can be done after suspend)
+      const pausedOffsets = new Map<number, number>();
+      const pausedSources = new Map(sources);
+
+      pausedSources.forEach((source, elementId) => {
+        if (source.isPlaying) {
+          if (source.isLooping) {
+            const bufferDuration = source.buffer?.duration || 0;
+            if (bufferDuration > 0) {
+              pausedOffsets.set(elementId, pauseTime % bufferDuration);
+            }
+            source.isPlaying = false;
+            source.sourceNode = null;
+          } else {
+            source.isPlaying = false;
+            source.sourceNode = null;
+          }
+        }
+      });
+
+      set({
+        isEverythingPaused: true,
+        pausedElementsOffset: pausedOffsets,
+        sources: pausedSources,
+        pauseResumeTransition: 'idle',
+      });
+
+      if (get().pauseResumeTargetState === 'running') {
+        void get().resumeAll();
+      }
+    } catch (error) {
+      set({ pauseResumeTransition: 'idle' });
+      console.error('Failed to pause all:', error);
+    }
+  },
+
+  resumeAll: async () => {
+    const {
+      audioContext,
+      isEverythingPaused,
+      globalGainNode,
+      discordCaptureNode,
+      discordSilentGainNode,
+      pausedElementsOffset,
+      isTimelinePlaying,
+      isTimelinePaused,
+      timelineStartTimeContext,
+      timelinePauseTimeContext,
+      pauseResumeTransition,
+    } = get();
+
+    if (!audioContext || !isEverythingPaused) return;
+
+    if (pauseResumeTransition === 'pausing') {
+      set({ pauseResumeTargetState: 'running' });
+      return;
+    }
+
+    if (pauseResumeTransition === 'resuming') {
+      return;
+    }
+
+    set({
+      pauseResumeTargetState: 'running',
+      pauseResumeTransition: 'resuming',
+    });
+
+    try {
+      // Resume audio context FIRST - this unpauses the timeline immediately
+      await audioContext.resume();
+
+      // Calculate new timeline position
+      let newStartTimeContext = timelineStartTimeContext;
+      if (
+        isTimelinePlaying &&
+        isTimelinePaused &&
+        timelineStartTimeContext !== null &&
+        timelinePauseTimeContext !== null
+      ) {
+        const pausedDuration = audioContext.currentTime - timelinePauseTimeContext;
+        newStartTimeContext = timelineStartTimeContext + pausedDuration;
+      }
+
+      // Update state immediately - UI feedback + timeline resumes
+      set({
+        isEverythingPaused: false,
+        isTimelinePaused: false,
+        timelineStartTimeContext: newStartTimeContext,
+        timelinePauseTimeContext: null,
+        pausedElementsOffset: new Map(),
+      });
+
+      if (pausedElementsOffset.size > 0) {
+        const pausedEntries = Array.from(pausedElementsOffset.entries());
+        const currentSources = new Map(get().sources);
+        const ctx = get().audioContext;
+
+        if (ctx && ctx.state !== 'suspended') {
+          const completed = await processInAnimationFrames(
+            pausedEntries,
+            ([elementId, offset]) => {
+              const source = currentSources.get(elementId);
+              if (source && !source.isPlaying && source.isLooping && source.buffer) {
+                try {
+                  const sourceNode = ctx.createBufferSource();
+                  sourceNode.buffer = source.buffer;
+                  sourceNode.loop = true;
+                  sourceNode.connect(source.gainNode);
+                  sourceNode.start(0, offset);
+                  source.sourceNode = sourceNode;
+                  source.isPlaying = true;
+                } catch (error) {
+                  console.error(`Failed to resume looping element ${elementId}:`, error);
+                }
+              }
+            },
+            () => {
+              const latest = get();
+              return (
+                latest.pauseResumeTransition !== 'resuming' ||
+                latest.pauseResumeTargetState === 'paused'
+              );
+            }
+          );
+
+          if (completed && get().pauseResumeTargetState === 'running') {
+            set({ sources: currentSources });
+          }
+        }
+      }
+
+      if (
+        discordCaptureNode &&
+        discordSilentGainNode &&
+        globalGainNode &&
+        useSettingsStore.getState().settings.output_device_id === 'discord'
+      ) {
+        setTimeout(() => {
+          try {
+            globalGainNode.connect(discordCaptureNode);
+            discordCaptureNode.connect(discordSilentGainNode);
+            discordSilentGainNode.connect(audioContext.destination);
+          } catch (e) {
+            console.warn('Failed to reconnect Discord capture node:', e);
+          }
+        }, 0);
+      }
+
+      set({ pauseResumeTransition: 'idle' });
+
+      if (get().pauseResumeTargetState === 'paused') {
+        void get().pauseAll();
+      }
+    } catch (error) {
+      set({ pauseResumeTransition: 'idle' });
+      console.error('Failed to resume all:', error);
+    }
   },
 
   playScheduled: async (elementId, delayMs, playDurationMs, fadeInDuration = 0) => {
@@ -980,8 +1312,180 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     }
   },
 
+  startTimeline: (timelineElements, tracks, isLooping = false, context) => {
+    const {
+      audioContext,
+      playScheduled,
+      activeTrackTimeouts,
+      activeQlcCueTimeouts,
+      activeQlcRunFunctionIds,
+    } = get();
+    if (!audioContext) return;
+
+    // Ensure audio context is running
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().catch(console.error);
+    }
+
+    // Clear all existing timeouts
+    activeTrackTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    activeQlcCueTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    set({ activeTrackTimeouts: new Map(), isTimelineLoopEnabled: isLooping });
+
+    const qlcRunSet = new Set(activeQlcRunFunctionIds);
+    const qlcTimeouts: number[] = [];
+
+    // Calculate durations
+    let maxEndMs = 0;
+    const trackDurations = new Map<number, number>();
+    const trackElements = new Map<number, typeof timelineElements>();
+
+    timelineElements.forEach(te => {
+      const endMs = te.start_time_ms + te.duration_ms;
+      if (endMs > maxEndMs) maxEndMs = endMs;
+      trackDurations.set(te.track_id, Math.max(trackDurations.get(te.track_id) || 0, endMs));
+      if (!trackElements.has(te.track_id)) trackElements.set(te.track_id, []);
+      trackElements.get(te.track_id)!.push(te);
+    });
+
+    if (maxEndMs === 0) maxEndMs = 60000;
+
+    // Schedule function for tracks
+    const scheduleTrackChunk = (
+      trackId: number,
+      durationMs: number,
+      elements: typeof timelineElements,
+      trackIsLooping: boolean,
+      baseDelayMs: number = 0
+    ) => {
+      elements.forEach(te => {
+        let elementIdToPlay = te.audio_element_id;
+
+        if (te.element_group_id) {
+          const members = useElementGroupStore.getState().groupMembers[te.element_group_id] || [];
+          if (members.length > 0) {
+            if (members.length === 1) {
+              elementIdToPlay = members[0].audio_element_id;
+            } else {
+              const lastPlayed = get().lastPlayedGroupElement.get(te.element_group_id);
+              const available = members.filter(m => m.audio_element_id !== lastPlayed);
+              const pick = available[Math.floor(Math.random() * available.length)];
+              elementIdToPlay = pick.audio_element_id;
+
+              const newMap = new Map(get().lastPlayedGroupElement);
+              newMap.set(te.element_group_id, elementIdToPlay);
+              set({ lastPlayedGroupElement: newMap });
+            }
+          }
+        }
+
+        if (elementIdToPlay) {
+          // No fade in for immediate start
+          playScheduled(
+            elementIdToPlay,
+            baseDelayMs + te.start_time_ms,
+            te.duration_ms,
+            0 // No fade in
+          ).catch(console.error);
+        } else if (te.cue_type === 'qlc' && te.qlc_function_id) {
+          const qlcFunctionId = te.qlc_function_id;
+          const triggerDelay = baseDelayMs + te.start_time_ms;
+          const timeoutId = globalThis.setTimeout(() => {
+            const reconnectPolicy = useSettingsStore.getState().settings.qlc_reconnect_policy;
+            const maxAttempts = reconnectPolicy === 'auto' ? 3 : reconnectPolicy === 'off' ? 1 : 2;
+
+            const runCue = async () => {
+              for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                try {
+                  if (
+                    te.qlc_action === 'parameter' &&
+                    te.qlc_param_name &&
+                    te.qlc_param_value !== null
+                  ) {
+                    await invoke('qlc_set_function_parameter', {
+                      functionId: qlcFunctionId,
+                      parameterName: te.qlc_param_name,
+                      value: te.qlc_param_value,
+                    });
+                  } else {
+                    await invoke('qlc_trigger_function', {
+                      functionId: qlcFunctionId,
+                      action: te.qlc_action ?? 'start',
+                    });
+                  }
+                  qlcRunSet.add(qlcFunctionId);
+                  set({ activeQlcRunFunctionIds: new Set(qlcRunSet) });
+                  return;
+                } catch (error) {
+                  if (attempt === maxAttempts - 1) {
+                    console.error('Failed to execute QLC+ cue:', te.id, error);
+                  }
+                }
+              }
+            };
+
+            void runCue();
+          }, triggerDelay);
+
+          qlcTimeouts.push(timeoutId as unknown as number);
+          set({ activeQlcCueTimeouts: [...qlcTimeouts] });
+        }
+      });
+
+      if (trackIsLooping && durationMs > 0) {
+        const timeoutId = setTimeout(() => {
+          scheduleTrackChunk(trackId, durationMs, elements, trackIsLooping, 0);
+        }, durationMs);
+
+        const currentTimeouts = get().activeTrackTimeouts;
+        currentTimeouts.set(trackId, timeoutId as unknown as number);
+        set({ activeTrackTimeouts: new Map(currentTimeouts) });
+      }
+    };
+
+    // Set state immediately - NO 100ms delay
+    const currentContextTime = get().audioContext?.currentTime || 0;
+    set({
+      isTimelinePlaying: true,
+      isTimelinePaused: false,
+      timelineStartTimeContext: currentContextTime,
+      timelineDurationMs: maxEndMs,
+      ...(context ? { activePlaybackContext: context } : {}),
+    });
+
+    // Schedule immediately - NO delay
+    tracks.forEach(track => {
+      const elements = trackElements.get(track.id) || [];
+      const durationMs = trackDurations.get(track.id) || 0;
+      scheduleTrackChunk(track.id, durationMs, elements, track.is_looping, 0);
+    });
+
+    // Global timeout to stop isTimelinePlaying when no tracks are looping
+    const anyLooping = tracks.some(t => t.is_looping);
+    if (!anyLooping && maxEndMs > 0) {
+      const timeoutId = setTimeout(() => {
+        set({
+          isTimelinePlaying: false,
+          timelineStartTimeContext: null,
+          timelinePauseTimeContext: null,
+        });
+      }, maxEndMs);
+      const currentTimeouts = get().activeTrackTimeouts;
+      currentTimeouts.set(-1, timeoutId as unknown as number);
+      set({ activeTrackTimeouts: new Map(currentTimeouts) });
+    }
+  },
+
   crossfadeToTimeline: (timelineElements, tracks, isLooping = false, context) => {
-    const { audioContext, sources, playScheduled, activeTrackTimeouts, isTimelinePaused } = get();
+    const {
+      audioContext,
+      sources,
+      playScheduled,
+      activeTrackTimeouts,
+      isTimelinePaused,
+      activeQlcCueTimeouts,
+      activeQlcRunFunctionIds,
+    } = get();
     if (!audioContext) return;
 
     if (audioContext.state === 'suspended') {
@@ -992,7 +1496,11 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     }
 
     activeTrackTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    activeQlcCueTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
     set({ activeTrackTimeouts: new Map(), isTimelineLoopEnabled: isLooping });
+
+    const qlcRunSet = new Set(activeQlcRunFunctionIds);
+    const qlcTimeouts: number[] = [];
 
     const now = audioContext.currentTime;
     const fadeOutDuration = 2.0; // 2 seconds crossfade
@@ -1090,6 +1598,48 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
             te.duration_ms,
             fadeIn
           ).catch(console.error);
+        } else if (te.cue_type === 'qlc' && te.qlc_function_id) {
+          const qlcFunctionId = te.qlc_function_id;
+          const triggerDelay = baseDelayMs + te.start_time_ms;
+          const timeoutId = globalThis.setTimeout(() => {
+            const reconnectPolicy = useSettingsStore.getState().settings.qlc_reconnect_policy;
+            const maxAttempts = reconnectPolicy === 'auto' ? 3 : reconnectPolicy === 'off' ? 1 : 2;
+
+            const runCue = async () => {
+              for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                try {
+                  if (
+                    te.qlc_action === 'parameter' &&
+                    te.qlc_param_name &&
+                    te.qlc_param_value !== null
+                  ) {
+                    await invoke('qlc_set_function_parameter', {
+                      functionId: qlcFunctionId,
+                      parameterName: te.qlc_param_name,
+                      value: te.qlc_param_value,
+                    });
+                  } else {
+                    await invoke('qlc_trigger_function', {
+                      functionId: qlcFunctionId,
+                      action: te.qlc_action ?? 'start',
+                    });
+                  }
+                  qlcRunSet.add(qlcFunctionId);
+                  set({ activeQlcRunFunctionIds: new Set(qlcRunSet) });
+                  return;
+                } catch (error) {
+                  if (attempt === maxAttempts - 1) {
+                    console.error('Failed to execute QLC+ cue:', te.id, error);
+                  }
+                }
+              }
+            };
+
+            void runCue();
+          }, triggerDelay);
+
+          qlcTimeouts.push(timeoutId as unknown as number);
+          set({ activeQlcCueTimeouts: [...qlcTimeouts] });
         }
       });
 

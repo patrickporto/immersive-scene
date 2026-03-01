@@ -43,13 +43,15 @@ export function BottomPlayer() {
   const {
     sources,
     stopAll,
+    startTimeline,
     crossfadeToTimeline,
     globalVolume,
     setGlobalVolume,
     isTimelinePlaying,
     isTimelinePaused,
-    pauseTimeline,
-    resumeTimeline,
+    isEverythingPaused,
+    pauseAll,
+    resumeAll,
     activePlaybackContext,
     setTimelineLoopEnabled,
   } = useAudioEngineStore();
@@ -89,9 +91,9 @@ export function BottomPlayer() {
     };
   }, [settings.output_device_id]);
 
-  // Derive playing status
+  // Derive playing status - simple logic: anything playing means "active"
   const playingCount = Array.from(sources.values()).filter(s => s.isPlaying).length;
-  const isPlaying = (isTimelinePlaying && !isTimelinePaused) || playingCount > 0;
+  const isAnythingPlaying = (isTimelinePlaying && !isTimelinePaused) || playingCount > 0;
 
   const activeTimeline = timelines.find(t => t.id === selectedTimelineId);
 
@@ -109,36 +111,41 @@ export function BottomPlayer() {
       ? timelines.find(t => t.id === selectedTimelineId)?.name
       : null;
 
+  // Master play/pause button logic:
+  // - If everything is paused: resume all
+  // - If anything is playing: pause all (looping elements resume, one-shots stop)
+  // - If nothing is playing: start the selected timeline/mood
   const handleTogglePlay = () => {
-    if (isPlaying) {
-      if (isTimelinePlaying && !isTimelinePaused) {
-        if (
-          selectedMood?.id !== activePlaybackContext?.moodId &&
-          selectedSoundSet &&
-          selectedMood &&
-          selectedTimelineId
-        ) {
-          // Crossfade to new mood
+    if (isEverythingPaused) {
+      // Resume everything that was paused
+      void resumeAll();
+    } else if (isAnythingPlaying) {
+      // Pause everything (looping elements will resume later, one-shots stop permanently)
+      void pauseAll();
+    } else {
+      // Nothing is playing - check if we need to start fresh or crossfade
+      if (selectedTimelineId && selectedSoundSet && selectedMood) {
+        // Check if we're switching from a different mood/timeline
+        const isSwitchingMood =
+          activePlaybackContext &&
+          (activePlaybackContext.moodId !== selectedMood.id ||
+            activePlaybackContext.timelineId !== selectedTimelineId);
+
+        if (isSwitchingMood) {
+          // Crossfade from previous mood to new mood
           crossfadeToTimeline(timelineElements, tracks, activeTimeline?.is_looping, {
             soundSetId: selectedSoundSet.id,
             moodId: selectedMood.id,
             timelineId: selectedTimelineId,
           });
         } else {
-          pauseTimeline();
+          // Fresh start - no crossfade needed, immediate playback
+          startTimeline(timelineElements, tracks, activeTimeline?.is_looping, {
+            soundSetId: selectedSoundSet.id,
+            moodId: selectedMood.id,
+            timelineId: selectedTimelineId,
+          });
         }
-      } else {
-        stopAll();
-      }
-    } else {
-      if (isTimelinePaused && selectedMood?.id === activePlaybackContext?.moodId) {
-        resumeTimeline();
-      } else if (selectedTimelineId && selectedSoundSet && selectedMood) {
-        crossfadeToTimeline(timelineElements, tracks, activeTimeline?.is_looping, {
-          soundSetId: selectedSoundSet.id,
-          moodId: selectedMood.id,
-          timelineId: selectedTimelineId,
-        });
       }
     }
   };
@@ -178,7 +185,7 @@ export function BottomPlayer() {
           {/* Currently Playing Info */}
           <Cluster gap={3} align="center" className="flex-1 min-w-0">
             <div className="relative w-12 h-12 rounded-lg bg-[#1a1a25] flex-shrink-0 border border-white/5 flex items-center justify-center">
-              {isPlaying && (
+              {isAnythingPlaying && (
                 <div className="absolute inset-0 bg-cyan-500/10 flex items-center justify-center backdrop-blur-[1px] rounded-lg">
                   <Activity size={18} className="text-cyan-400 animate-pulse" />
                 </div>
@@ -205,7 +212,8 @@ export function BottomPlayer() {
           {/* Master Controls */}
           <Cluster gap={2} align="center" justify="center" className="flex-shrink-0 relative">
             <MasterControls
-              isPlaying={isPlaying}
+              isPaused={isEverythingPaused}
+              isAnythingPlaying={isAnythingPlaying}
               onTogglePlay={handleTogglePlay}
               onStopAll={stopAll}
             />

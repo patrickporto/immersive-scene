@@ -8,6 +8,7 @@ import { Music, Plus, Trash2, Download } from 'lucide-react';
 import { MoodCreateSection } from './MoodCreateSection';
 import { SoundSetCreateSection } from './SoundSetCreateSection';
 import { SoundSetListItem } from './SoundSetListItem';
+import { InlineEditable } from '../../../shared/components';
 import { Cluster } from '../../../shared/components/layout/Cluster';
 import { Stack } from '../../../shared/components/layout/Stack';
 import { useToast } from '../../../shared/hooks/useToast';
@@ -44,6 +45,8 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
     toggleSoundSetSelection,
     loadAudioElements,
     selectedSoundSetIds,
+    renameSoundSet,
+    renameMood,
   } = useSoundSetStore();
 
   const { loadGroups } = useElementGroupStore();
@@ -238,6 +241,7 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
                 onSelect={() => selectSoundSet(soundSet)}
                 onToggleView={() => toggleSoundSetSelection(soundSet.id)}
                 onDelete={() => void handleDeleteSoundSet(soundSet.id, soundSet.name)}
+                onRename={newName => void renameSoundSet(soundSet.id, newName)}
                 onExport={() => void handleExport(soundSet.id, soundSet.name)}
                 onToggleEnabled={() => {
                   void toggleSoundSetEnabled(soundSet.id, !soundSet.is_enabled).then(() => {
@@ -284,9 +288,16 @@ export function SoundSetBrowser({ isCollapsed = false }: SoundSetBrowserProps) {
                     : 'text-gray-500 hover:bg-white/[0.03] border-transparent'
                 )}
               >
-                <span className="cursor-pointer flex-1" onClick={() => selectMood(mood)}>
-                  {mood.name}
-                </span>
+                <div className="flex-1 cursor-pointer" onClick={() => selectMood(mood)}>
+                  <InlineEditable
+                    value={mood.name}
+                    onSave={newName => void renameMood(mood.id, newName)}
+                    className={cn(
+                      'w-full',
+                      selectedMood?.id === mood.id ? 'text-black' : 'text-gray-400'
+                    )}
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={e => {

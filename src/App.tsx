@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Settings } from 'lucide-react';
 
 import { AudioUploader } from './features/audio-engine/components/AudioUploader';
@@ -9,6 +9,8 @@ import { TimelineEditor } from './features/audio-engine/components/TimelineEdito
 import { useAudioEngineStore } from './features/audio-engine/stores/audioEngineStore';
 import { BottomPlayer } from './features/mixer/components/BottomPlayer';
 import ChannelSidebar from './features/mixer/components/ChannelSidebar';
+import { QlcSidebar } from './features/qlc-plus/components/QlcSidebar';
+import { useQlcPlusStore } from './features/qlc-plus/stores/qlcPlusStore';
 import { SettingsModal } from './features/settings/components/SettingsModal';
 import { useSettingsStore } from './features/settings/stores/settingsStore';
 import { SoundSetBrowser } from './features/sound-sets/components/SoundSetBrowser';
@@ -22,7 +24,7 @@ export default function App() {
   const { loadSoundSets, selectedSoundSet, selectedMood, isLoading, soundSets, error } =
     useSoundSetStore();
   const { initAudioContext } = useAudioEngineStore();
-  const { loadSettings } = useSettingsStore();
+  const { loadSettings, settings } = useSettingsStore();
   const { success, error: toastError } = useToast();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -32,13 +34,18 @@ export default function App() {
 
     const isGroupDrag = draggableId.startsWith('group-');
     const isMemberDrag = draggableId.startsWith('member-');
+    const isQlcDrag = draggableId.startsWith('qlc-function-');
 
     let elementId: number | null = null;
     let draggedGroupId: number | null = null;
     let memberId: number | null = null;
     let sourceGroupId: number | null = null;
+    let qlcFunctionId: string | null = null;
 
-    if (isGroupDrag) {
+    if (isQlcDrag) {
+      qlcFunctionId = draggableId.replace('qlc-function-', '');
+      if (!qlcFunctionId) return;
+    } else if (isGroupDrag) {
       draggedGroupId = parseInt(draggableId.replace('group-', ''), 10);
       if (isNaN(draggedGroupId)) return;
     } else if (isMemberDrag) {
@@ -77,6 +84,8 @@ export default function App() {
           addElementToGroup(groupId, elementId)
             .then(() => success('Adicionado ao grupo'))
             .catch(err => toastError('Erro ao adicionar: ' + String(err)));
+        } else if (isQlcDrag) {
+          toastError('QLC+ cues cannot be dropped into audio groups.');
         } else {
           toastError('Apenas áudios soltos podem ser inseridos no grupo.');
         }
@@ -143,6 +152,8 @@ export default function App() {
     if (destination.droppableId === 'effects-zone') {
       if (elementId !== null) {
         useSoundSetStore.getState().updateAudioElementChannel(elementId, 'effects');
+      } else if (isQlcDrag) {
+        toastError('QLC+ cues cannot be routed to effects zone.');
       } else {
         toastError('Cannot route an entire group to effects zone yet.');
       }
@@ -200,7 +211,9 @@ export default function App() {
       // Estimate duration from loaded audio buffer (if available)
       // For groups, use the longest duration among all group members
       let durationMs = 10000;
-      if (elementId !== null) {
+      if (isQlcDrag) {
+        durationMs = 1000;
+      } else if (elementId !== null) {
         const audioSource = useAudioEngineStore.getState().sources.get(elementId);
         if (audioSource?.buffer) {
           durationMs = Math.round(audioSource.buffer.duration * 1000);
@@ -237,10 +250,20 @@ export default function App() {
         return;
       }
 
-      addElementToTrack(targetTrackId, elementId, draggedGroupId, startTimeMs, durationMs)
+      const qlcFunction = qlcFunctionId
+        ? useQlcPlusStore.getState().functions.find(fn => fn.id === qlcFunctionId)
+        : null;
+
+      addElementToTrack(targetTrackId, elementId, draggedGroupId, startTimeMs, durationMs, {
+        cueType: isQlcDrag ? 'qlc' : 'audio',
+        qlcFunctionId,
+        qlcAction: isQlcDrag ? 'start' : null,
+        cueLabel: isQlcDrag ? (qlcFunction?.name ?? qlcFunctionId) : null,
+        cueTags: isQlcDrag ? (qlcFunction?.function_type ?? null) : null,
+      })
         .then(() => {
           success(
-            `Adicionado à trilha ${targetTrackId} (${startTimeMs}ms - duração ${durationMs}ms)`
+            `${isQlcDrag ? 'QLC+ cue' : 'Adicionado'} na trilha ${targetTrackId} (${startTimeMs}ms - duração ${durationMs}ms)`
           );
         })
         .catch((err: unknown) => {
@@ -316,10 +339,12 @@ export default function App() {
             )}
 
             {selectedMood && (
-              <AudioUploader
-                soundSetId={selectedSoundSet?.id ?? selectedMood.sound_set_id}
-                moodId={selectedMood.id}
-              />
+              <div className="space-y-5 p-3 md:p-5">
+                <AudioUploader
+                  soundSetId={selectedSoundSet?.id ?? selectedMood.sound_set_id}
+                  moodId={selectedMood.id}
+                />
+              </div>
             )}
           </div>
 
@@ -333,10 +358,12 @@ export default function App() {
         </main>
       </DragDropContext>
 
-      {/* Right Sidebar */}
       <div className="z-10 hidden xl:block shadow-[-10px_0_30px_rgba(0,0,0,0.5)] bg-[#0f0f15]">
         <ChannelSidebar />
       </div>
+
+      {/* QLC+ Sidebar */}
+      <AnimatePresence>{settings.qlc_enabled && <QlcSidebar />}</AnimatePresence>
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 

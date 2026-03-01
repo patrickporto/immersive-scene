@@ -54,6 +54,7 @@ interface SoundSetState {
   loadSoundSets: () => Promise<void>;
   createSoundSet: (name: string, description: string) => Promise<void>;
   deleteSoundSet: (id: number) => Promise<void>;
+  renameSoundSet: (id: number, name: string) => Promise<void>;
   selectSoundSet: (soundSet: SoundSet | null) => void;
   toggleSoundSetSelection: (id: number) => void;
   toggleSoundSetEnabled: (id: number, isEnabled: boolean) => Promise<void>;
@@ -61,6 +62,7 @@ interface SoundSetState {
   loadMoods: () => Promise<void>;
   createMood: (name: string, description: string) => Promise<void>;
   deleteMood: (id: number) => Promise<void>;
+  renameMood: (id: number, name: string) => Promise<void>;
   selectMood: (mood: Mood | null) => void;
 
   loadAudioElements: () => Promise<void>;
@@ -72,6 +74,7 @@ interface SoundSetState {
     channelId: number | null
   ) => Promise<AudioElement>;
   deleteAudioElement: (id: number) => Promise<void>;
+  renameAudioElement: (id: number, name: string) => Promise<void>;
   updateAudioElementChannel: (id: number, channelType: string) => Promise<void>;
   updateAudioElementChannelId: (id: number, channelId: number | null) => Promise<void>;
 
@@ -187,6 +190,23 @@ export const useSoundSetStore = create<SoundSetState>()(
         }
       },
 
+      renameSoundSet: async (id: number, name: string) => {
+        set({ isLoading: true, error: null });
+        try {
+          await invoke('rename_sound_set', { id, name });
+          set(state => ({
+            soundSets: state.soundSets.map(ss => (ss.id === id ? { ...ss, name } : ss)),
+            selectedSoundSet:
+              state.selectedSoundSet?.id === id
+                ? { ...state.selectedSoundSet, name }
+                : state.selectedSoundSet,
+            isLoading: false,
+          }));
+        } catch (error) {
+          set({ error: String(error), isLoading: false });
+        }
+      },
+
       toggleSoundSetEnabled: async (id, isEnabled) => {
         set({ isLoading: true, error: null });
         try {
@@ -284,6 +304,21 @@ export const useSoundSetStore = create<SoundSetState>()(
         }
       },
 
+      renameMood: async (id: number, name: string) => {
+        set({ isLoading: true, error: null });
+        try {
+          await invoke('rename_mood', { id, name });
+          set(state => ({
+            moods: state.moods.map(m => (m.id === id ? { ...m, name } : m)),
+            selectedMood:
+              state.selectedMood?.id === id ? { ...state.selectedMood, name } : state.selectedMood,
+            isLoading: false,
+          }));
+        } catch (error) {
+          set({ error: String(error), isLoading: false });
+        }
+      },
+
       selectMood: mood => {
         set({ selectedMood: mood });
       },
@@ -326,6 +361,21 @@ export const useSoundSetStore = create<SoundSetState>()(
           await invoke('delete_audio_element', { id });
           set(state => ({
             audioElements: state.audioElements.filter(el => el.id !== id),
+            isLoading: false,
+          }));
+        } catch (error) {
+          set({ error: String(error), isLoading: false });
+        }
+      },
+
+      renameAudioElement: async (id: number, name: string) => {
+        set({ isLoading: true, error: null });
+        try {
+          await invoke('rename_audio_element', { id, name });
+          set(state => ({
+            audioElements: state.audioElements.map(el =>
+              el.id === id ? { ...el, file_name: name } : el
+            ),
             isLoading: false,
           }));
         } catch (error) {

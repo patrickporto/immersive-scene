@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { Trash2, Upload, Eye, EyeOff, Check } from 'lucide-react';
 
+import { InlineEditable } from '../../../shared/components';
 import { Cluster } from '../../../shared/components/layout/Cluster';
 import { cn } from '../../../shared/utils/cn';
 
@@ -14,6 +15,7 @@ interface SoundSetListItemProps {
   onToggleView: () => void;
   onDelete: () => void;
   onExport: () => void;
+  onRename: (newName: string) => void;
   onToggleEnabled: () => void;
 }
 
@@ -32,6 +34,7 @@ export function SoundSetListItem({
   onToggleView,
   onDelete,
   onExport,
+  onRename,
   onToggleEnabled,
 }: SoundSetListItemProps) {
   return (
@@ -64,14 +67,15 @@ export function SoundSetListItem({
           {isViewSelected && <Check className="w-3 h-3 stroke-[3]" />}
         </button>
 
-        <span
+        <InlineEditable
+          value={name}
+          onSave={onRename}
           className={cn(
             'text-sm font-bold truncate tracking-tight flex-1',
             !isEnabled && 'line-through opacity-70'
           )}
-        >
-          {name}
-        </span>
+          inputClassName="text-sm font-bold"
+        />
         <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 flex-shrink-0 transition-all">
           <button
             type="button"

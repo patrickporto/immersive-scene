@@ -6,6 +6,7 @@ import { Layers, ChevronDown } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
 import { IconPause, IconPlay, IconTrash } from '../../../shared/components/Icons';
+import { InlineEditable } from '../../../shared/components/InlineEditable';
 import { Tooltip } from '../../../shared/components/Tooltip';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
@@ -27,7 +28,7 @@ interface ElementGroupCardProps {
 
 export function ElementGroupCard({ group, members, audioElements, mode }: ElementGroupCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const { deleteGroup, removeElementFromGroup } = useElementGroupStore();
+  const { renameGroup, deleteGroup, removeElementFromGroup } = useElementGroupStore();
   const { play, pause, stop, sources } = useAudioEngineStore();
   const { channels, setChannelVolume } = useMixerStore();
   const { soundSets } = useSoundSetStore();
@@ -173,12 +174,12 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
                 >
                   <div className="flex items-center gap-2">
                     <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                    <p
+                    <InlineEditable
+                      value={group.name}
+                      onSave={newName => void renameGroup(group.id, newName)}
                       className="text-[12px] font-bold text-gray-300 truncate w-full"
-                      title={group.name}
-                    >
-                      {group.name}
-                    </p>
+                      inputClassName="text-[12px] font-bold text-gray-300"
+                    />
                   </div>
                 </Tooltip>
 

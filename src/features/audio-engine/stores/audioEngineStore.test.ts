@@ -1,6 +1,12 @@
+import { invoke } from '@tauri-apps/api/core';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { useAudioEngineStore } from './audioEngineStore';
+import { useSettingsStore } from '../../settings/stores/settingsStore';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
 
 describe('audioEngineStore scheduling', () => {
   let playScheduledMock: ReturnType<typeof vi.fn>;
@@ -18,6 +24,12 @@ describe('audioEngineStore scheduling', () => {
       transportLastAppliedByElement: new Map(),
       transportLatencySamples: { start: [], pause: [], stop: [] },
       transportQueueHighWatermark: 0,
+      isEverythingPaused: false,
+      pausedElementsOffset: new Map(),
+      pauseResumeTargetState: null,
+      pauseResumeTransition: 'idle',
+      activeQlcCueTimeouts: [],
+      activeQlcRunFunctionIds: new Set(),
       playScheduled: playScheduledMock as unknown as (
         elementId: number,
         delayMs: number,
@@ -25,6 +37,14 @@ describe('audioEngineStore scheduling', () => {
         fadeInDuration?: number
       ) => Promise<void>,
     });
+
+    useSettingsStore.setState(state => ({
+      settings: {
+        ...state.settings,
+        qlc_reconnect_policy: 'retry-once',
+        qlc_stop_behavior: 'stop-run-cues',
+      },
+    }));
   });
 
   afterEach(() => {
@@ -247,5 +267,205 @@ describe('audioEngineStore scheduling', () => {
     const startSamples = useAudioEngineStore.getState().transportLatencySamples.start;
     expect(startSamples.length).toBeGreaterThan(0);
     expect(startSamples[0]).toBeLessThan(100);
+  });
+
+  it('disconnects discord capture path before suspending on pauseAll', async () => {
+    const suspend = vi.fn().mockResolvedValue(undefined);
+    const discordCaptureNode = { disconnect: vi.fn() } as unknown as AudioWorkletNode;
+    const discordSilentGainNode = { disconnect: vi.fn() } as unknown as GainNode;
+
+    useAudioEngineStore.setState({
+      audioContext: {
+        currentTime: 123,
+        suspend,
+      } as unknown as AudioContext,
+      isEverythingPaused: false,
+      sources: new Map(),
+      discordCaptureNode,
+      discordSilentGainNode,
+    });
+
+    await useAudioEngineStore.getState().pauseAll();
+
+    expect(discordCaptureNode.disconnect).toHaveBeenCalled();
+    expect(discordSilentGainNode.disconnect).toHaveBeenCalled();
+    expect(suspend).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(discordCaptureNode.disconnect).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(suspend).mock.invocationCallOrder[0]
+    );
+  });
+
+  it('resumes paused sources in non-blocking batches', async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const createBufferSource = vi.fn(() => ({
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      loop: false,
+      onended: null,
+      buffer: null,
+    }));
+
+    const pausedOffsets = new Map<number, number>();
+    const sources = new Map();
+
+    for (let id = 1; id <= 15; id += 1) {
+      pausedOffsets.set(id, 0.5);
+      sources.set(id, {
+        element: {} as never,
+        buffer: {} as AudioBuffer,
+        sourceNode: null,
+        gainNode: { gain: { value: 1 } } as unknown as GainNode,
+        isPlaying: false,
+        isLooping: true,
+        activeScheduledCount: 0,
+        scheduledNodes: [],
+      });
+    }
+
+    useAudioEngineStore.setState({
+      audioContext: {
+        state: 'running',
+        currentTime: 200,
+        resume,
+        createBufferSource,
+      } as unknown as AudioContext,
+      sources,
+      isEverythingPaused: true,
+      pausedElementsOffset: pausedOffsets,
+      isTimelinePlaying: false,
+      isTimelinePaused: false,
+      timelineStartTimeContext: null,
+      timelinePauseTimeContext: null,
+    });
+
+    const resumePromise = useAudioEngineStore.getState().resumeAll();
+    await Promise.resolve();
+
+    const immediateState = useAudioEngineStore.getState();
+    expect(immediateState.isEverythingPaused).toBe(false);
+    expect(
+      Array.from(immediateState.sources.values()).filter(source => source.isPlaying)
+    ).toHaveLength(0);
+
+    await vi.runAllTimersAsync();
+    await resumePromise;
+
+    const finalState = useAudioEngineStore.getState();
+    expect(Array.from(finalState.sources.values()).filter(source => source.isPlaying)).toHaveLength(
+      15
+    );
+    expect(createBufferSource).toHaveBeenCalledTimes(15);
+  });
+
+  it('queues pause request while resume transition is running', async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const suspend = vi.fn().mockResolvedValue(undefined);
+    const createBufferSource = vi.fn(() => ({
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      loop: false,
+      onended: null,
+      buffer: null,
+    }));
+
+    const pausedOffsets = new Map<number, number>();
+    const sources = new Map();
+
+    for (let id = 1; id <= 20; id += 1) {
+      pausedOffsets.set(id, 0.25);
+      sources.set(id, {
+        element: {} as never,
+        buffer: {} as AudioBuffer,
+        sourceNode: null,
+        gainNode: { gain: { value: 1 } } as unknown as GainNode,
+        isPlaying: false,
+        isLooping: true,
+        activeScheduledCount: 0,
+        scheduledNodes: [],
+      });
+    }
+
+    useAudioEngineStore.setState({
+      audioContext: {
+        state: 'running',
+        currentTime: 300,
+        resume,
+        suspend,
+        createBufferSource,
+      } as unknown as AudioContext,
+      sources,
+      isEverythingPaused: true,
+      pausedElementsOffset: pausedOffsets,
+      isTimelinePlaying: false,
+      isTimelinePaused: false,
+      timelineStartTimeContext: null,
+      timelinePauseTimeContext: null,
+      pauseResumeTransition: 'idle',
+      pauseResumeTargetState: null,
+    });
+
+    const resumePromise = useAudioEngineStore.getState().resumeAll();
+    await Promise.resolve();
+    useAudioEngineStore.getState().pauseAll();
+
+    await vi.runAllTimersAsync();
+    await resumePromise;
+
+    const state = useAudioEngineStore.getState();
+    expect(state.isEverythingPaused).toBe(true);
+    expect(state.pauseResumeTransition).toBe('idle');
+    expect(suspend).toHaveBeenCalled();
+  });
+
+  it('schedules QLC+ cue execution from timeline', async () => {
+    vi.mocked(invoke).mockResolvedValue({ success: true });
+
+    useAudioEngineStore.getState().crossfadeToTimeline(
+      [
+        {
+          id: 501,
+          track_id: 1,
+          audio_element_id: null,
+          element_group_id: null,
+          start_time_ms: 1200,
+          duration_ms: 1000,
+          cue_type: 'qlc',
+          qlc_function_id: 'scene-01',
+          qlc_action: 'start',
+        },
+      ],
+      [{ id: 1, is_looping: false }],
+      false
+    );
+
+    vi.advanceTimersByTime(1400);
+    await vi.runAllTimersAsync();
+
+    expect(invoke).toHaveBeenCalledWith('qlc_trigger_function', {
+      functionId: 'scene-01',
+      action: 'start',
+    });
+  });
+
+  it('uses panic behavior on stopAll when configured', () => {
+    vi.mocked(invoke).mockResolvedValue({ success: true });
+
+    useSettingsStore.setState(state => ({
+      settings: {
+        ...state.settings,
+        qlc_stop_behavior: 'panic',
+      },
+    }));
+
+    useAudioEngineStore.setState({
+      activeQlcRunFunctionIds: new Set(['scene-01']),
+      activeQlcCueTimeouts: [globalThis.setTimeout(() => undefined, 1000) as unknown as number],
+    });
+
+    useAudioEngineStore.getState().stopAll();
+
+    expect(invoke).toHaveBeenCalledWith('qlc_panic');
   });
 });

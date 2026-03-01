@@ -1,8 +1,10 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use rusqlite::{Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Manager;
 
@@ -31,6 +33,154 @@ pub struct AppSettings {
     pub discord_guild_id: String,
     #[serde(default)]
     pub discord_channel_id: String,
+    #[serde(default = "default_qlc_endpoint")]
+    pub qlc_endpoint: String,
+    #[serde(default = "default_qlc_transport")]
+    pub qlc_transport: String,
+    #[serde(default = "default_qlc_auth_mode")]
+    pub qlc_auth_mode: String,
+    #[serde(default = "default_qlc_auth_token")]
+    pub qlc_auth_token: String,
+    #[serde(default = "default_qlc_request_timeout_ms")]
+    pub qlc_request_timeout_ms: u64,
+    #[serde(default = "default_qlc_reconnect_policy")]
+    pub qlc_reconnect_policy: String,
+    #[serde(default = "default_qlc_stop_behavior")]
+    pub qlc_stop_behavior: String,
+    #[serde(default)]
+    pub qlc_enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QlcFunction {
+    pub id: String,
+    pub name: String,
+    pub function_type: String,
+    pub supports_toggle: bool,
+    pub supports_parameter: bool,
+    pub parameter_name: Option<String>,
+    pub parameter_min: Option<f64>,
+    pub parameter_max: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QlcCommandResult {
+    pub success: bool,
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QlcHealthStatus {
+    pub healthy: bool,
+    pub api_compatible: bool,
+    pub checked_at: String,
+    pub message: String,
+    pub error_code: Option<String>,
+    pub version: Option<String>,
+}
+
+fn default_qlc_endpoint() -> String {
+    String::new()
+}
+
+fn default_qlc_transport() -> String {
+    "rest".to_string()
+}
+
+fn default_qlc_auth_mode() -> String {
+    "none".to_string()
+}
+
+fn default_qlc_auth_token() -> String {
+    String::new()
+}
+
+fn default_qlc_request_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_qlc_reconnect_policy() -> String {
+    "retry-once".to_string()
+}
+
+fn default_qlc_stop_behavior() -> String {
+    "stop-run-cues".to_string()
+}
+
+fn default_app_settings(app_handle: &AppHandle) -> AppSettings {
+    AppSettings {
+        audio_file_strategy: "reference".to_string(),
+        library_path: get_default_library_path(app_handle)
+            .to_string_lossy()
+            .to_string(),
+        output_device_id: String::new(),
+        discord_bot_token: String::new(),
+        discord_guild_id: String::new(),
+        discord_channel_id: String::new(),
+        qlc_endpoint: default_qlc_endpoint(),
+        qlc_transport: default_qlc_transport(),
+        qlc_auth_mode: default_qlc_auth_mode(),
+        qlc_auth_token: default_qlc_auth_token(),
+        qlc_request_timeout_ms: default_qlc_request_timeout_ms(),
+        qlc_reconnect_policy: default_qlc_reconnect_policy(),
+        qlc_stop_behavior: default_qlc_stop_behavior(),
+        qlc_enabled: false,
+    }
+}
+
+fn apply_app_settings_defaults(app_handle: &AppHandle, settings: &mut AppSettings) {
+    let defaults = default_app_settings(app_handle);
+
+    if settings.audio_file_strategy != "reference" && settings.audio_file_strategy != "copy" {
+        settings.audio_file_strategy = defaults.audio_file_strategy;
+    }
+
+    if settings.library_path.trim().is_empty() {
+        settings.library_path = defaults.library_path;
+    }
+
+    if settings.qlc_transport != "rest" {
+        settings.qlc_transport = defaults.qlc_transport;
+    }
+
+    if settings.qlc_auth_mode != "none" && settings.qlc_auth_mode != "token" {
+        settings.qlc_auth_mode = defaults.qlc_auth_mode;
+    }
+
+    if settings.qlc_request_timeout_ms < 500 || settings.qlc_request_timeout_ms > 30_000 {
+        settings.qlc_request_timeout_ms = defaults.qlc_request_timeout_ms;
+    }
+
+    if settings.qlc_reconnect_policy != "off"
+        && settings.qlc_reconnect_policy != "retry-once"
+        && settings.qlc_reconnect_policy != "auto"
+    {
+        settings.qlc_reconnect_policy = defaults.qlc_reconnect_policy;
+    }
+
+    if settings.qlc_stop_behavior != "stop-run-cues" && settings.qlc_stop_behavior != "panic" {
+        settings.qlc_stop_behavior = defaults.qlc_stop_behavior;
+    }
+}
+
+fn validate_app_settings(
+    app_handle: &AppHandle,
+    mut settings: AppSettings,
+) -> Result<AppSettings, String> {
+    apply_app_settings_defaults(app_handle, &mut settings);
+
+    if !settings.qlc_endpoint.trim().is_empty() {
+        reqwest::Url::parse(settings.qlc_endpoint.trim())
+            .map_err(|_| "Invalid QLC+ endpoint URL".to_string())?;
+        settings.qlc_endpoint = settings.qlc_endpoint.trim().to_string();
+    }
+
+    if settings.qlc_auth_mode == "token" && settings.qlc_auth_token.trim().is_empty() {
+        return Err("QLC+ auth token is required when auth mode is 'token'".to_string());
+    }
+
+    Ok(settings)
 }
 
 pub(crate) fn get_settings_path(app_handle: &AppHandle) -> PathBuf {
@@ -46,29 +196,17 @@ pub(crate) fn get_default_library_path(app_handle: &AppHandle) -> PathBuf {
 
 pub(crate) fn read_app_settings(app_handle: &AppHandle) -> AppSettings {
     let settings_path = get_settings_path(app_handle);
-    let default_library_path = get_default_library_path(app_handle)
-        .to_string_lossy()
-        .to_string();
 
     if settings_path.exists() {
         if let Ok(content) = fs::read_to_string(&settings_path) {
             if let Ok(mut settings) = serde_json::from_str::<AppSettings>(&content) {
-                if settings.library_path.trim().is_empty() {
-                    settings.library_path = default_library_path;
-                }
+                apply_app_settings_defaults(app_handle, &mut settings);
                 return settings;
             }
         }
     }
 
-    AppSettings {
-        audio_file_strategy: "reference".to_string(),
-        library_path: default_library_path,
-        output_device_id: "".to_string(),
-        discord_bot_token: "".to_string(),
-        discord_guild_id: "".to_string(),
-        discord_channel_id: "".to_string(),
-    }
+    default_app_settings(app_handle)
 }
 
 #[tauri::command]
@@ -79,11 +217,378 @@ async fn get_app_settings(app_handle: AppHandle) -> Result<AppSettings, String> 
 #[tauri::command]
 async fn update_app_settings(app_handle: AppHandle, settings: AppSettings) -> Result<(), String> {
     let settings_path = get_settings_path(&app_handle);
+    let validated = validate_app_settings(&app_handle, settings)?;
 
-    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&validated).map_err(|e| e.to_string())?;
     fs::write(settings_path, json).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+fn qlc_error(code: &str, message: impl Into<String>) -> String {
+    format!("{code}|{}", message.into())
+}
+
+fn map_qlc_http_error(err: &reqwest::Error) -> String {
+    if err.is_timeout() {
+        return qlc_error("timeout", "QLC+ request timed out");
+    }
+
+    if err.is_connect() {
+        return qlc_error("endpoint_unavailable", "Cannot reach QLC+ endpoint");
+    }
+
+    if let Some(status) = err.status() {
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return qlc_error("auth_failure", "QLC+ authentication failed");
+        }
+
+        if status.as_u16() == 404 {
+            return qlc_error(
+                "unsupported_feature",
+                "QLC+ endpoint does not support this operation",
+            );
+        }
+
+        if status.is_server_error() {
+            return qlc_error(
+                "endpoint_unavailable",
+                "QLC+ endpoint returned server error",
+            );
+        }
+    }
+
+    qlc_error("transport_error", format!("QLC+ request failed: {err}"))
+}
+
+fn qlc_endpoint_join(endpoint: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        endpoint.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn qlc_http_client(settings: &AppSettings) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(settings.qlc_request_timeout_ms))
+        .build()
+        .map_err(|e| {
+            qlc_error(
+                "transport_error",
+                format!("Failed to build QLC+ client: {e}"),
+            )
+        })
+}
+
+fn qlc_with_auth(
+    request: reqwest::RequestBuilder,
+    settings: &AppSettings,
+) -> reqwest::RequestBuilder {
+    if settings.qlc_auth_mode == "token" && !settings.qlc_auth_token.trim().is_empty() {
+        return request.bearer_auth(settings.qlc_auth_token.trim());
+    }
+
+    request
+}
+
+fn parse_qlc_functions(payload: Value) -> Result<Vec<QlcFunction>, String> {
+    let array = payload
+        .as_array()
+        .cloned()
+        .or_else(|| payload.get("functions").and_then(Value::as_array).cloned())
+        .ok_or_else(|| {
+            qlc_error(
+                "unsupported_feature",
+                "QLC+ response did not contain a function list",
+            )
+        })?;
+
+    let mut functions = Vec::new();
+    for item in array {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("function_id").and_then(Value::as_str))
+            .or_else(|| item.get("fid").and_then(Value::as_str))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        if id.is_empty() {
+            continue;
+        }
+
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("display_name").and_then(Value::as_str))
+            .or_else(|| item.get("title").and_then(Value::as_str))
+            .unwrap_or(&id)
+            .to_string();
+
+        let function_type = item
+            .get("function_type")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("type").and_then(Value::as_str))
+            .unwrap_or("generic")
+            .to_string();
+
+        let parameter_name = item
+            .get("parameter_name")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                item.get("parameter")
+                    .and_then(|p| p.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+
+        let parameter_min = item
+            .get("parameter_min")
+            .and_then(Value::as_f64)
+            .or_else(|| {
+                item.get("parameter")
+                    .and_then(|p| p.get("min"))
+                    .and_then(Value::as_f64)
+            });
+
+        let parameter_max = item
+            .get("parameter_max")
+            .and_then(Value::as_f64)
+            .or_else(|| {
+                item.get("parameter")
+                    .and_then(|p| p.get("max"))
+                    .and_then(Value::as_f64)
+            });
+
+        let supports_toggle = item
+            .get("supports_toggle")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        let supports_parameter = item
+            .get("supports_parameter")
+            .and_then(Value::as_bool)
+            .unwrap_or(parameter_name.is_some());
+
+        functions.push(QlcFunction {
+            id,
+            name,
+            function_type,
+            supports_toggle,
+            supports_parameter,
+            parameter_name,
+            parameter_min,
+            parameter_max,
+        });
+    }
+
+    Ok(functions)
+}
+
+async fn qlc_list_functions_internal(settings: &AppSettings) -> Result<Vec<QlcFunction>, String> {
+    if settings.qlc_endpoint.trim().is_empty() {
+        return Err(qlc_error(
+            "endpoint_missing",
+            "QLC+ endpoint is not configured",
+        ));
+    }
+
+    let client = qlc_http_client(settings)?;
+    let url = qlc_endpoint_join(&settings.qlc_endpoint, "functions");
+
+    let response = qlc_with_auth(client.get(url), settings)
+        .send()
+        .await
+        .map_err(|e| map_qlc_http_error(&e))?
+        .error_for_status()
+        .map_err(|e| map_qlc_http_error(&e))?;
+
+    let payload = response
+        .json::<Value>()
+        .await
+        .map_err(|e| qlc_error("unsupported_feature", format!("Invalid QLC+ payload: {e}")))?;
+
+    parse_qlc_functions(payload)
+}
+
+async fn qlc_post_action_internal(
+    settings: &AppSettings,
+    action_path: &str,
+    payload: Option<Value>,
+) -> Result<(), String> {
+    if settings.qlc_endpoint.trim().is_empty() {
+        return Err(qlc_error(
+            "endpoint_missing",
+            "QLC+ endpoint is not configured",
+        ));
+    }
+
+    let attempts = match settings.qlc_reconnect_policy.as_str() {
+        "off" => 1,
+        "retry-once" => 2,
+        "auto" => 3,
+        _ => 2,
+    };
+
+    let client = qlc_http_client(settings)?;
+    let url = qlc_endpoint_join(&settings.qlc_endpoint, action_path);
+    let mut last_error = String::new();
+
+    for _ in 0..attempts {
+        let request = qlc_with_auth(client.post(url.clone()), settings);
+        let request = if let Some(body) = payload.clone() {
+            request.json(&body)
+        } else {
+            request
+        };
+
+        match request.send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    last_error = map_qlc_http_error(&e);
+                }
+            },
+            Err(e) => {
+                last_error = map_qlc_http_error(&e);
+            }
+        }
+    }
+
+    if last_error.is_empty() {
+        return Err(qlc_error("transport_error", "Unknown QLC+ command failure"));
+    }
+
+    Err(last_error)
+}
+
+#[tauri::command]
+async fn qlc_health_check(app_handle: AppHandle) -> Result<QlcHealthStatus, String> {
+    let settings = read_app_settings(&app_handle);
+    let checked_at = chrono::Utc::now().to_rfc3339();
+
+    if settings.qlc_endpoint.trim().is_empty() {
+        return Ok(QlcHealthStatus {
+            healthy: false,
+            api_compatible: false,
+            checked_at,
+            message: "QLC+ endpoint is not configured".to_string(),
+            error_code: Some("endpoint_missing".to_string()),
+            version: None,
+        });
+    }
+
+    match qlc_list_functions_internal(&settings).await {
+        Ok(functions) => Ok(QlcHealthStatus {
+            healthy: true,
+            api_compatible: true,
+            checked_at,
+            message: format!(
+                "Connected to QLC+ ({} functions discovered)",
+                functions.len()
+            ),
+            error_code: None,
+            version: None,
+        }),
+        Err(err) => {
+            let mut parts = err.splitn(2, '|');
+            let code = parts.next().unwrap_or("transport_error").to_string();
+            let message = parts
+                .next()
+                .unwrap_or("QLC+ health check failed")
+                .to_string();
+
+            Ok(QlcHealthStatus {
+                healthy: false,
+                api_compatible: false,
+                checked_at,
+                message,
+                error_code: Some(code),
+                version: None,
+            })
+        }
+    }
+}
+
+#[tauri::command]
+async fn qlc_list_functions(app_handle: AppHandle) -> Result<Vec<QlcFunction>, String> {
+    let settings = read_app_settings(&app_handle);
+    qlc_list_functions_internal(&settings).await
+}
+
+#[tauri::command]
+async fn qlc_trigger_function(
+    app_handle: AppHandle,
+    function_id: String,
+    action: Option<String>,
+) -> Result<QlcCommandResult, String> {
+    let settings = read_app_settings(&app_handle);
+    let normalized_action = action.unwrap_or_else(|| "start".to_string());
+    let action_path = format!("functions/{}/{}", function_id, normalized_action);
+    qlc_post_action_internal(&settings, &action_path, None).await?;
+
+    Ok(QlcCommandResult {
+        success: true,
+        code: "ok".to_string(),
+        message: format!(
+            "Function '{}' action '{}' sent",
+            function_id, normalized_action
+        ),
+    })
+}
+
+#[tauri::command]
+async fn qlc_stop_function(
+    app_handle: AppHandle,
+    function_id: String,
+) -> Result<QlcCommandResult, String> {
+    let settings = read_app_settings(&app_handle);
+    let action_path = format!("functions/{}/stop", function_id);
+    qlc_post_action_internal(&settings, &action_path, None).await?;
+
+    Ok(QlcCommandResult {
+        success: true,
+        code: "ok".to_string(),
+        message: format!("Function '{}' stop sent", function_id),
+    })
+}
+
+#[tauri::command]
+async fn qlc_set_function_parameter(
+    app_handle: AppHandle,
+    function_id: String,
+    parameter_name: String,
+    value: f64,
+) -> Result<QlcCommandResult, String> {
+    let settings = read_app_settings(&app_handle);
+    let action_path = format!("functions/{}/parameter", function_id);
+    let payload = serde_json::json!({
+        "name": parameter_name,
+        "value": value
+    });
+
+    qlc_post_action_internal(&settings, &action_path, Some(payload)).await?;
+
+    Ok(QlcCommandResult {
+        success: true,
+        code: "ok".to_string(),
+        message: format!("Function '{}' parameter updated", function_id),
+    })
+}
+
+#[tauri::command]
+async fn qlc_panic(app_handle: AppHandle) -> Result<QlcCommandResult, String> {
+    let settings = read_app_settings(&app_handle);
+    qlc_post_action_internal(&settings, "panic", None).await?;
+
+    Ok(QlcCommandResult {
+        success: true,
+        code: "ok".to_string(),
+        message: "QLC+ panic command sent".to_string(),
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -162,6 +667,14 @@ pub struct TimelineElement {
     pub start_time_ms: i64,
     pub duration_ms: i64,
     pub is_available: bool,
+    pub cue_type: String,
+    pub qlc_function_id: Option<String>,
+    pub qlc_action: Option<String>,
+    pub qlc_param_name: Option<String>,
+    pub qlc_param_value: Option<f64>,
+    pub cue_label: Option<String>,
+    pub cue_notes: Option<String>,
+    pub cue_tags: Option<String>,
 }
 
 fn get_db_path(app_handle: &AppHandle) -> PathBuf {
@@ -280,6 +793,14 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             element_group_id INTEGER,
             start_time_ms INTEGER DEFAULT 0,
             duration_ms INTEGER DEFAULT 0,
+            cue_type TEXT NOT NULL DEFAULT 'audio',
+            qlc_function_id TEXT,
+            qlc_action TEXT,
+            qlc_param_name TEXT,
+            qlc_param_value REAL,
+            cue_label TEXT,
+            cue_notes TEXT,
+            cue_tags TEXT,
             FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE,
             FOREIGN KEY (track_id) REFERENCES timeline_tracks(id) ON DELETE CASCADE,
             FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE,
@@ -454,6 +975,14 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
                 element_group_id INTEGER,
                 start_time_ms INTEGER DEFAULT 0,
                 duration_ms INTEGER DEFAULT 0,
+                cue_type TEXT NOT NULL DEFAULT 'audio',
+                qlc_function_id TEXT,
+                qlc_action TEXT,
+                qlc_param_name TEXT,
+                qlc_param_value REAL,
+                cue_label TEXT,
+                cue_notes TEXT,
+                cue_tags TEXT,
                 FOREIGN KEY (timeline_id) REFERENCES timelines(id) ON DELETE CASCADE,
                 FOREIGN KEY (track_id) REFERENCES timeline_tracks(id) ON DELETE CASCADE,
                 FOREIGN KEY (audio_element_id) REFERENCES audio_elements(id) ON DELETE CASCADE,
@@ -487,6 +1016,64 @@ fn init_database(conn: &Connection) -> SqliteResult<()> {
             [],
         )?;
         conn.execute("PRAGMA foreign_keys=on;", [])?;
+    }
+
+    let mut timeline_columns_stmt = conn.prepare("PRAGMA table_info(timeline_elements)")?;
+    let timeline_columns: Vec<String> = timeline_columns_stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<_, _>>()?;
+
+    if !timeline_columns.iter().any(|c| c == "cue_type") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN cue_type TEXT NOT NULL DEFAULT 'audio'",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "qlc_function_id") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN qlc_function_id TEXT",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "qlc_action") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN qlc_action TEXT",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "qlc_param_name") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN qlc_param_name TEXT",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "qlc_param_value") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN qlc_param_value REAL",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "cue_label") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN cue_label TEXT",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "cue_notes") {
+        conn.execute(
+            "ALTER TABLE timeline_elements ADD COLUMN cue_notes TEXT",
+            [],
+        )?;
+    }
+
+    if !timeline_columns.iter().any(|c| c == "cue_tags") {
+        conn.execute("ALTER TABLE timeline_elements ADD COLUMN cue_tags TEXT", [])?;
     }
 
     // Timeline deduplication migration
@@ -687,6 +1274,20 @@ async fn delete_sound_set(app_handle: AppHandle, id: i64) -> Result<(), String> 
 }
 
 #[tauri::command]
+async fn rename_sound_set(app_handle: AppHandle, id: i64, name: String) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE sound_sets SET name = ?1 WHERE id = ?2",
+        (&name, &id),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn update_sound_set_enabled(
     app_handle: AppHandle,
     id: i64,
@@ -759,6 +1360,17 @@ async fn delete_mood(app_handle: AppHandle, id: i64) -> Result<(), String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute("DELETE FROM moods WHERE id = ?1", [id])
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn rename_mood(app_handle: AppHandle, id: i64, name: String) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute("UPDATE moods SET name = ?1 WHERE id = ?2", (&name, &id))
         .map_err(|e| e.to_string())?;
 
     Ok(())
@@ -885,6 +1497,20 @@ async fn delete_audio_element(app_handle: AppHandle, id: i64) -> Result<(), Stri
 
     conn.execute("DELETE FROM audio_elements WHERE id = ?1", [id])
         .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn rename_audio_element(app_handle: AppHandle, id: i64, name: String) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE audio_elements SET file_name = ?1 WHERE id = ?2",
+        (&name, &id),
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -1136,6 +1762,20 @@ async fn delete_timeline_track(app_handle: AppHandle, id: i64) -> Result<(), Str
 }
 
 #[tauri::command]
+async fn rename_timeline_track(app_handle: AppHandle, id: i64, name: String) -> Result<(), String> {
+    let db_path = get_db_path(&app_handle);
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "UPDATE timeline_tracks SET name = ?1 WHERE id = ?2",
+        (&name, &id),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn update_timeline_track_order(
     app_handle: AppHandle,
     id: i64,
@@ -1161,9 +1801,25 @@ async fn add_element_to_track(
     element_group_id: Option<i64>,
     start_time_ms: i64,
     duration_ms: i64,
+    cue_type: Option<String>,
+    qlc_function_id: Option<String>,
+    qlc_action: Option<String>,
+    qlc_param_name: Option<String>,
+    qlc_param_value: Option<f64>,
+    cue_label: Option<String>,
+    cue_notes: Option<String>,
+    cue_tags: Option<String>,
 ) -> Result<TimelineElement, String> {
-    if audio_element_id.is_none() && element_group_id.is_none() {
-        return Err("Must provide either audio_element_id or element_group_id".into());
+    let normalized_cue_type = cue_type.unwrap_or_else(|| "audio".to_string());
+
+    if normalized_cue_type == "audio" && audio_element_id.is_none() && element_group_id.is_none() {
+        return Err(
+            "Must provide either audio_element_id or element_group_id for audio cues".into(),
+        );
+    }
+
+    if normalized_cue_type == "qlc" && qlc_function_id.is_none() {
+        return Err("Must provide qlc_function_id for qlc cues".into());
     }
 
     let db_path = get_db_path(&app_handle);
@@ -1182,7 +1838,22 @@ async fn add_element_to_track(
         .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO timeline_elements (timeline_id, track_id, audio_element_id, element_group_id, start_time_ms, duration_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO timeline_elements (
+            timeline_id,
+            track_id,
+            audio_element_id,
+            element_group_id,
+            start_time_ms,
+            duration_ms,
+            cue_type,
+            qlc_function_id,
+            qlc_action,
+            qlc_param_name,
+            qlc_param_value,
+            cue_label,
+            cue_notes,
+            cue_tags
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         (
             &timeline_id,
             &track_id,
@@ -1190,8 +1861,17 @@ async fn add_element_to_track(
             &element_group_id,
             &start_time_ms,
             &duration_ms,
+            &normalized_cue_type,
+            &qlc_function_id,
+            &qlc_action,
+            &qlc_param_name,
+            &qlc_param_value,
+            &cue_label,
+            &cue_notes,
+            &cue_tags,
         ),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     let id = conn.last_insert_rowid();
 
@@ -1204,6 +1884,14 @@ async fn add_element_to_track(
         start_time_ms,
         duration_ms,
         is_available: true,
+        cue_type: normalized_cue_type,
+        qlc_function_id,
+        qlc_action,
+        qlc_param_name,
+        qlc_param_value,
+        cue_label,
+        cue_notes,
+        cue_tags,
     })
 }
 
@@ -1224,6 +1912,14 @@ async fn get_track_elements(
             te.element_group_id, 
             te.start_time_ms, 
             te.duration_ms,
+            te.cue_type,
+            te.qlc_function_id,
+            te.qlc_action,
+            te.qlc_param_name,
+            te.qlc_param_value,
+            te.cue_label,
+            te.cue_notes,
+            te.cue_tags,
             COALESCE(
                 (SELECT ss.is_enabled FROM sound_sets ss JOIN audio_elements ae ON ae.sound_set_id = ss.id WHERE ae.id = te.audio_element_id),
                 (SELECT ss.is_enabled FROM sound_sets ss JOIN element_groups eg ON eg.sound_set_id = ss.id WHERE eg.id = te.element_group_id),
@@ -1244,7 +1940,17 @@ async fn get_track_elements(
                 element_group_id: row.get(3)?,
                 start_time_ms: row.get(4)?,
                 duration_ms: row.get(5)?,
-                is_available: row.get::<_, Option<bool>>(6)?.unwrap_or(true),
+                cue_type: row
+                    .get::<_, Option<String>>(6)?
+                    .unwrap_or_else(|| "audio".to_string()),
+                qlc_function_id: row.get(7)?,
+                qlc_action: row.get(8)?,
+                qlc_param_name: row.get(9)?,
+                qlc_param_value: row.get(10)?,
+                cue_label: row.get(11)?,
+                cue_notes: row.get(12)?,
+                cue_tags: row.get(13)?,
+                is_available: row.get::<_, Option<bool>>(14)?.unwrap_or(true),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1771,6 +2477,12 @@ pub fn run() {
             init_db_command,
             get_app_settings,
             update_app_settings,
+            qlc_health_check,
+            qlc_list_functions,
+            qlc_trigger_function,
+            qlc_stop_function,
+            qlc_set_function_parameter,
+            qlc_panic,
             create_audio_channel,
             get_audio_channels,
             update_audio_channel,
@@ -1823,6 +2535,10 @@ pub fn run() {
             get_all_available_element_groups,
             add_element_to_group,
             remove_element_from_group,
+            rename_sound_set,
+            rename_mood,
+            rename_audio_element,
+            rename_timeline_track,
         ])
         .setup(|app| {
             let app_handle = app.handle();
@@ -1837,7 +2553,9 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {
-            tauri::async_runtime::block_on(discord::shutdown_discord_connection(app_handle.clone()));
+            tauri::async_runtime::block_on(discord::shutdown_discord_connection(
+                app_handle.clone(),
+            ));
         }
     });
 }
@@ -1846,6 +2564,7 @@ pub fn run() {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use serde_json::json;
 
     #[test]
     fn test_timeline_migration_singleton() {
@@ -2043,5 +2762,37 @@ mod tests {
         assert!(results.iter().find(|(id, _)| *id == 3).unwrap().1);
         // Element 4 (Group S2 disabled) -> false
         assert!(!results.iter().find(|(id, _)| *id == 4).unwrap().1);
+    }
+
+    #[test]
+    fn test_parse_qlc_functions_payload() {
+        let payload = json!({
+            "functions": [
+                {
+                    "id": "f1",
+                    "name": "Thunder",
+                    "type": "scene",
+                    "supports_toggle": true,
+                    "supports_parameter": true,
+                    "parameter_name": "intensity",
+                    "parameter_min": 0.0,
+                    "parameter_max": 255.0
+                }
+            ]
+        });
+
+        let parsed = parse_qlc_functions(payload).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, "f1");
+        assert_eq!(parsed[0].name, "Thunder");
+        assert_eq!(parsed[0].function_type, "scene");
+        assert!(parsed[0].supports_parameter);
+    }
+
+    #[test]
+    fn test_parse_qlc_functions_payload_invalid_shape() {
+        let payload = json!({ "unexpected": true });
+        let err = parse_qlc_functions(payload).unwrap_err();
+        assert!(err.starts_with("unsupported_feature|"));
     }
 }

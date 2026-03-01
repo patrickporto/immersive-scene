@@ -27,6 +27,25 @@ export interface TimelineElement {
   start_time_ms: number;
   duration_ms: number;
   is_available: boolean;
+  cue_type: 'audio' | 'qlc';
+  qlc_function_id: string | null;
+  qlc_action: string | null;
+  qlc_param_name: string | null;
+  qlc_param_value: number | null;
+  cue_label: string | null;
+  cue_notes: string | null;
+  cue_tags: string | null;
+}
+
+export interface TimelineCueOptions {
+  cueType?: 'audio' | 'qlc';
+  qlcFunctionId?: string | null;
+  qlcAction?: string | null;
+  qlcParamName?: string | null;
+  qlcParamValue?: number | null;
+  cueLabel?: string | null;
+  cueNotes?: string | null;
+  cueTags?: string | null;
 }
 
 interface TimelineElementLike {
@@ -37,12 +56,28 @@ interface TimelineElementLike {
   start_time_ms?: number;
   duration_ms?: number;
   is_available?: boolean;
+  cue_type?: 'audio' | 'qlc';
+  qlc_function_id?: string | null;
+  qlc_action?: string | null;
+  qlc_param_name?: string | null;
+  qlc_param_value?: number | null;
+  cue_label?: string | null;
+  cue_notes?: string | null;
+  cue_tags?: string | null;
   trackId?: number;
   audioElementId?: number | null;
   elementGroupId?: number | null;
   startTimeMs?: number;
   durationMs?: number;
   isAvailable?: boolean;
+  cueType?: 'audio' | 'qlc';
+  qlcFunctionId?: string | null;
+  qlcAction?: string | null;
+  qlcParamName?: string | null;
+  qlcParamValue?: number | null;
+  cueLabel?: string | null;
+  cueNotes?: string | null;
+  cueTags?: string | null;
 }
 
 const normalizeTimelineElement = (element: TimelineElementLike): TimelineElement => ({
@@ -59,6 +94,14 @@ const normalizeTimelineElement = (element: TimelineElementLike): TimelineElement
   start_time_ms: Number(element.start_time_ms ?? element.startTimeMs) || 0,
   duration_ms: Number(element.duration_ms ?? element.durationMs) || 0,
   is_available: element.is_available ?? element.isAvailable ?? true,
+  cue_type: (element.cue_type ?? element.cueType ?? 'audio') as 'audio' | 'qlc',
+  qlc_function_id: element.qlc_function_id ?? element.qlcFunctionId ?? null,
+  qlc_action: element.qlc_action ?? element.qlcAction ?? null,
+  qlc_param_name: element.qlc_param_name ?? element.qlcParamName ?? null,
+  qlc_param_value: element.qlc_param_value ?? element.qlcParamValue ?? null,
+  cue_label: element.cue_label ?? element.cueLabel ?? null,
+  cue_notes: element.cue_notes ?? element.cueNotes ?? null,
+  cue_tags: element.cue_tags ?? element.cueTags ?? null,
 });
 
 interface TimelineState {
@@ -81,6 +124,7 @@ interface TimelineState {
   loadTimelineTracks: (timelineId: number) => Promise<void>;
   createTimelineTrack: (timelineId: number, name: string) => Promise<void>;
   deleteTimelineTrack: (id: number) => Promise<void>;
+  renameTimelineTrack: (id: number, name: string) => Promise<void>;
   updateTimelineTrackOrder: (id: number, orderIndex: number) => Promise<void>;
   setTrackLooping: (id: number, isLooping: boolean) => Promise<void>;
 
@@ -90,7 +134,8 @@ interface TimelineState {
     audioElementId: number | null,
     elementGroupId: number | null,
     startTimeMs: number,
-    durationMs: number
+    durationMs: number,
+    cueOptions?: TimelineCueOptions
   ) => Promise<void>;
   updateElementTimeAndDuration: (
     id: number,
@@ -214,6 +259,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     }
   },
 
+  renameTimelineTrack: async (id: number, name: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await invoke('rename_timeline_track', { id, name });
+      set(state => ({
+        tracks: state.tracks.map(t => (t.id === id ? { ...t, name } : t)),
+        isLoading: false,
+      }));
+    } catch (error) {
+      set({ error: String(error), isLoading: false });
+    }
+  },
+
   updateTimelineTrackOrder: async (id, orderIndex) => {
     try {
       await invoke('update_timeline_track_order', { id, orderIndex });
@@ -251,7 +309,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     }
   },
 
-  addElementToTrack: async (trackId, audioElementId, elementGroupId, startTimeMs, durationMs) => {
+  addElementToTrack: async (
+    trackId,
+    audioElementId,
+    elementGroupId,
+    startTimeMs,
+    durationMs,
+    cueOptions
+  ) => {
     set({ isLoading: true, error: null });
     try {
       const rawNewElement = await invoke<TimelineElementLike>('add_element_to_track', {
@@ -260,6 +325,14 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
         elementGroupId,
         startTimeMs,
         durationMs,
+        cueType: cueOptions?.cueType,
+        qlcFunctionId: cueOptions?.qlcFunctionId,
+        qlcAction: cueOptions?.qlcAction,
+        qlcParamName: cueOptions?.qlcParamName,
+        qlcParamValue: cueOptions?.qlcParamValue,
+        cueLabel: cueOptions?.cueLabel,
+        cueNotes: cueOptions?.cueNotes,
+        cueTags: cueOptions?.cueTags,
       });
       const newElement = normalizeTimelineElement(rawNewElement);
       set(state => ({

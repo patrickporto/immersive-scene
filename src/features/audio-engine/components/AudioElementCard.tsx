@@ -3,6 +3,7 @@ import type { MouseEvent } from 'react';
 import { motion } from 'framer-motion';
 
 import { IconPause, IconPlay, IconRepeat, IconTrash } from '../../../shared/components/Icons';
+import { InlineEditable } from '../../../shared/components/InlineEditable';
 import { Waveform } from '../../../shared/components/Waveform';
 import { useToast } from '../../../shared/hooks/useToast';
 import { cn } from '../../../shared/utils/cn';
@@ -27,7 +28,8 @@ interface AudioElementCardProps {
 export function AudioElementCard({ element, mode, isCombineTarget }: AudioElementCardProps) {
   const { play, pause, stop, sources, toggleLoop, selectedElementId, setSelectedElementId } =
     useAudioEngineStore();
-  const { deleteAudioElement, loadAudioElements, selectedMood, soundSets } = useSoundSetStore();
+  const { renameAudioElement, deleteAudioElement, loadAudioElements, selectedMood, soundSets } =
+    useSoundSetStore();
   const { channels, setChannelVolume } = useMixerStore();
   const { success, error } = useToast();
 
@@ -133,12 +135,12 @@ export function AudioElementCard({ element, mode, isCombineTarget }: AudioElemen
       </motion.button>
 
       <div className="flex-1 flex flex-col justify-center min-w-0 z-10">
-        <p
+        <InlineEditable
+          value={element.file_name.split('.')[0]}
+          onSave={newName => void renameAudioElement(element.id, newName)}
           className="text-[12px] font-bold text-gray-300 truncate w-full"
-          title={element.file_name}
-        >
-          {element.file_name.split('.')[0]}
-        </p>
+          inputClassName="text-[12px] font-bold text-gray-300"
+        />
 
         <div className="flex items-center gap-2 mt-1 relative">
           <motion.button
