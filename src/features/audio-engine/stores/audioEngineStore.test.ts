@@ -12,6 +12,12 @@ describe('audioEngineStore scheduling', () => {
       audioContext: { currentTime: 0, state: 'running' } as unknown as AudioContext,
       sources: new Map(),
       activeTrackTimeouts: new Map(),
+      transportCommandQueue: [],
+      nextTransportSequence: 0,
+      isTransportProcessingScheduled: false,
+      transportLastAppliedByElement: new Map(),
+      transportLatencySamples: { start: [], pause: [], stop: [] },
+      transportQueueHighWatermark: 0,
       playScheduled: playScheduledMock as unknown as (
         elementId: number,
         delayMs: number,
@@ -63,8 +69,8 @@ describe('audioEngineStore scheduling', () => {
     // Advance by maxEndMs (4500)
     vi.advanceTimersByTime(4500);
 
-    // Should have scheduled the identical chunk again
-    expect(playScheduledMock).toHaveBeenCalledTimes(2);
+    // Non-looping tracks should not schedule additional chunks
+    expect(playScheduledMock).toHaveBeenCalledTimes(0);
   });
 
   it('crossfadeToTimeline evaluates and sets activePlaybackContext state', () => {
@@ -88,5 +94,158 @@ describe('audioEngineStore scheduling', () => {
     const state = useAudioEngineStore.getState();
     expect(state.activePlaybackContext).toEqual(context);
     expect(state.isTimelinePlaying).toBe(true);
+  });
+
+  it('coalesces rapid play-pause-play commands to latest state', async () => {
+    const sourceNode = {
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      loop: false,
+      onended: null,
+      buffer: null,
+    } as unknown as AudioBufferSourceNode;
+
+    const createBufferSource = vi.fn(() => sourceNode);
+    const gainNode = { gain: { value: 1 } } as unknown as GainNode;
+
+    useAudioEngineStore.setState({
+      audioContext: {
+        state: 'running',
+        createBufferSource,
+        resume: vi.fn().mockResolvedValue(undefined),
+      } as unknown as AudioContext,
+      sources: new Map([
+        [
+          42,
+          {
+            element: {} as never,
+            buffer: {} as AudioBuffer,
+            sourceNode: null,
+            gainNode,
+            isPlaying: false,
+            isLooping: false,
+            activeScheduledCount: 0,
+            scheduledNodes: [],
+          },
+        ],
+      ]),
+      transportCommandQueue: [],
+      nextTransportSequence: 0,
+      isTransportProcessingScheduled: false,
+      transportLastAppliedByElement: new Map(),
+      transportLatencySamples: { start: [], pause: [], stop: [] },
+      transportQueueHighWatermark: 0,
+    });
+
+    void useAudioEngineStore.getState().play(42);
+    useAudioEngineStore.getState().pause(42);
+    void useAudioEngineStore.getState().play(42);
+
+    await vi.runAllTimersAsync();
+
+    const source = useAudioEngineStore.getState().sources.get(42);
+    expect(createBufferSource).toHaveBeenCalledTimes(1);
+    expect(source?.isPlaying).toBe(true);
+  });
+
+  it('keeps command queue bounded under rapid toggles', async () => {
+    const gainNode = { gain: { value: 1 } } as unknown as GainNode;
+
+    useAudioEngineStore.setState({
+      audioContext: {
+        state: 'running',
+        createBufferSource: vi.fn(() => ({
+          connect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn(),
+          loop: false,
+          onended: null,
+          buffer: null,
+        })),
+        resume: vi.fn().mockResolvedValue(undefined),
+      } as unknown as AudioContext,
+      sources: new Map([
+        [
+          7,
+          {
+            element: {} as never,
+            buffer: {} as AudioBuffer,
+            sourceNode: null,
+            gainNode,
+            isPlaying: false,
+            isLooping: false,
+            activeScheduledCount: 0,
+            scheduledNodes: [],
+          },
+        ],
+      ]),
+      transportCommandQueue: [],
+      nextTransportSequence: 0,
+      isTransportProcessingScheduled: false,
+      transportLastAppliedByElement: new Map(),
+      transportLatencySamples: { start: [], pause: [], stop: [] },
+      transportQueueHighWatermark: 0,
+    });
+
+    for (let i = 0; i < 300; i += 1) {
+      void useAudioEngineStore.getState().play(7);
+      useAudioEngineStore.getState().stop(7);
+    }
+
+    expect(useAudioEngineStore.getState().transportCommandQueue.length).toBeLessThanOrEqual(1);
+
+    await vi.runAllTimersAsync();
+
+    const state = useAudioEngineStore.getState();
+    expect(state.transportCommandQueue).toHaveLength(0);
+    expect(state.transportQueueHighWatermark).toBeLessThanOrEqual(1);
+  });
+
+  it('records transport latency samples within local control SLO', async () => {
+    const sourceNode = {
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      loop: false,
+      onended: null,
+      buffer: null,
+    } as unknown as AudioBufferSourceNode;
+
+    useAudioEngineStore.setState({
+      audioContext: {
+        state: 'running',
+        createBufferSource: vi.fn(() => sourceNode),
+        resume: vi.fn().mockResolvedValue(undefined),
+      } as unknown as AudioContext,
+      sources: new Map([
+        [
+          9,
+          {
+            element: {} as never,
+            buffer: {} as AudioBuffer,
+            sourceNode: null,
+            gainNode: { gain: { value: 1 } } as unknown as GainNode,
+            isPlaying: false,
+            isLooping: false,
+            activeScheduledCount: 0,
+            scheduledNodes: [],
+          },
+        ],
+      ]),
+      transportCommandQueue: [],
+      nextTransportSequence: 0,
+      isTransportProcessingScheduled: false,
+      transportLastAppliedByElement: new Map(),
+      transportLatencySamples: { start: [], pause: [], stop: [] },
+      transportQueueHighWatermark: 0,
+    });
+
+    void useAudioEngineStore.getState().play(9);
+    await vi.runAllTimersAsync();
+
+    const startSamples = useAudioEngineStore.getState().transportLatencySamples.start;
+    expect(startSamples.length).toBeGreaterThan(0);
+    expect(startSamples[0]).toBeLessThan(100);
   });
 });

@@ -16,7 +16,10 @@ export function OutputDevicePicker() {
   const { settings, updateSettings } = useSettingsStore();
 
   const selectedDeviceId = settings.output_device_id || '';
-  const hasDiscordConfig = settings.discord_bot_token.trim().length > 0;
+  const hasDiscordConfig =
+    settings.discord_bot_token.trim().length > 0 &&
+    settings.discord_guild_id.trim().length > 0 &&
+    settings.discord_channel_id.trim().length > 0;
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -106,8 +109,15 @@ export function OutputDevicePicker() {
 
             <div className="border-t border-white/10 py-2">
               <button
-                onClick={() => handleSelect('discord')}
-                className="w-full flex items-center justify-between px-4 py-2 hover:bg-white/5 transition-colors text-sm text-left group"
+                onClick={() => {
+                  if (hasDiscordConfig) {
+                    handleSelect('discord').catch(console.error);
+                  }
+                }}
+                disabled={!hasDiscordConfig}
+                className={`w-full flex items-center justify-between px-4 py-2 transition-colors text-sm text-left group ${
+                  hasDiscordConfig ? 'hover:bg-white/5' : 'opacity-50 cursor-not-allowed'
+                }`}
               >
                 <div className="flex items-center gap-3 text-gray-300 group-hover:text-white">
                   <Box
@@ -121,7 +131,9 @@ export function OutputDevicePicker() {
                       Discord Voice
                     </span>
                     {!hasDiscordConfig && (
-                      <span className="text-[10px] text-amber-500">Not configured</span>
+                      <span className="text-[10px] text-amber-500">
+                        Configure Token + Server + Channel
+                      </span>
                     )}
                   </div>
                 </div>

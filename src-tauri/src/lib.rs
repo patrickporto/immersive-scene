@@ -1762,7 +1762,7 @@ async fn get_group_members(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1814,6 +1814,7 @@ pub fn run() {
             discord::discord_connect,
             discord::discord_disconnect,
             discord::discord_send_audio,
+            discord::discord_get_stream_telemetry,
             get_group_members,
             create_element_group,
             rename_element_group,
@@ -1831,8 +1832,14 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            tauri::async_runtime::block_on(discord::shutdown_discord_connection(app_handle.clone()));
+        }
+    });
 }
 
 #[cfg(test)]

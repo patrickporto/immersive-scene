@@ -10,6 +10,7 @@ import { useAudioEngineStore } from './features/audio-engine/stores/audioEngineS
 import { BottomPlayer } from './features/mixer/components/BottomPlayer';
 import ChannelSidebar from './features/mixer/components/ChannelSidebar';
 import { SettingsModal } from './features/settings/components/SettingsModal';
+import { useSettingsStore } from './features/settings/stores/settingsStore';
 import { SoundSetBrowser } from './features/sound-sets/components/SoundSetBrowser';
 import { useElementGroupStore } from './features/sound-sets/stores/elementGroupStore';
 import { useGlobalOneShotStore } from './features/sound-sets/stores/globalOneShotStore';
@@ -21,6 +22,7 @@ export default function App() {
   const { loadSoundSets, selectedSoundSet, selectedMood, isLoading, soundSets, error } =
     useSoundSetStore();
   const { initAudioContext } = useAudioEngineStore();
+  const { loadSettings } = useSettingsStore();
   const { success, error: toastError } = useToast();
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -251,10 +253,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    console.log('App mounted, loading soundsets...');
+    console.log('App mounted, loading soundsets and settings...');
     loadSoundSets();
+    loadSettings();
     initAudioContext();
-  }, [loadSoundSets, initAudioContext]);
+  }, [loadSoundSets, loadSettings, initAudioContext]);
 
   useEffect(() => {
     console.log('SoundSets updated:', soundSets.length);

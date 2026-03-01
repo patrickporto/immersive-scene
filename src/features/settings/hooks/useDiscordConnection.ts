@@ -1,6 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef } from 'react';
 
 import { invoke } from '@tauri-apps/api/core';
+
+import { useDiscordStore } from '../stores/discordStore';
 
 export interface DiscordUser {
   id: string;
@@ -21,11 +23,19 @@ export interface DiscordChannel {
 }
 
 export function useDiscordConnection() {
-  const [isValidating, setIsValidating] = useState(false);
-  const [botUser, setBotUser] = useState<DiscordUser | null>(null);
-  const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
-  const [channels, setChannels] = useState<DiscordChannel[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    isValidating,
+    setIsValidating,
+    botUser,
+    setBotUser,
+    guilds,
+    setGuilds,
+    channels,
+    setChannels,
+    error,
+    setError,
+  } = useDiscordStore();
+
   const lastValidatedTokenRef = useRef<string | null>(null);
 
   const validateToken = useCallback(
@@ -58,23 +68,26 @@ export function useDiscordConnection() {
         setIsValidating(false);
       }
     },
-    [botUser, guilds.length]
+    [botUser, guilds.length, setBotUser, setError, setGuilds, setIsValidating]
   );
 
-  const loadChannels = useCallback(async (token: string, guildId: string) => {
-    if (!token || !guildId) return;
-    try {
-      const channelList = await invoke<DiscordChannel[]>('discord_list_voice_channels', {
-        token,
-        guildId,
-      });
-      setChannels(channelList);
-    } catch (err) {
-      console.error('Failed to load channels:', err);
-      setError(String(err));
-      setChannels([]);
-    }
-  }, []);
+  const loadChannels = useCallback(
+    async (token: string, guildId: string) => {
+      if (!token || !guildId) return;
+      try {
+        const channelList = await invoke<DiscordChannel[]>('discord_list_voice_channels', {
+          token,
+          guildId,
+        });
+        setChannels(channelList);
+      } catch (err) {
+        console.error('Failed to load channels:', err);
+        setError(String(err));
+        setChannels([]);
+      }
+    },
+    [setChannels, setError]
+  );
 
   return {
     isValidating,

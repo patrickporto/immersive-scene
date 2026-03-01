@@ -235,7 +235,7 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
         )}
       </AnimatePresence>
 
-      <TimelineZoomControls zoomLevel={zoomLevel} onZoomChange={setZoomLevel} />
+      {isExpanded && <TimelineZoomControls zoomLevel={zoomLevel} onZoomChange={setZoomLevel} />}
     </div>
   );
 }

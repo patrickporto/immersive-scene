@@ -36,10 +36,28 @@ export interface PlaybackContext {
   timelineId?: number;
 }
 
+type TransportIntent = 'start' | 'pause' | 'stop';
+
+interface TransportCommand {
+  sequence: number;
+  intent: TransportIntent;
+  elementId: number;
+  enqueuedAtMs: number;
+}
+
+interface TransportLatencySamples {
+  start: number[];
+  pause: number[];
+  stop: number[];
+}
+
 interface AudioEngineState {
   audioContext: AudioContext | null;
   globalGainNode: GainNode | null;
   discordDestinationNode: MediaStreamAudioDestinationNode | null;
+  discordCaptureNode: AudioWorkletNode | null;
+  discordSilentGainNode: GainNode | null;
+  discordConnectionCheckInterval: number | null;
   channelNodes: Map<number, GainNode>;
   sources: Map<number, AudioSource>;
   isInitialized: boolean;
@@ -67,9 +85,16 @@ interface AudioEngineState {
   timelineDurationMs: number;
   isTimelineLoopEnabled: boolean;
   activePlaybackContext: PlaybackContext | null;
+  transportCommandQueue: TransportCommand[];
+  nextTransportSequence: number;
+  isTransportProcessingScheduled: boolean;
+  transportLastAppliedByElement: Map<number, number>;
+  transportLatencySamples: TransportLatencySamples;
+  transportQueueHighWatermark: number;
 
   setOutputDevice: (deviceId: string) => Promise<void>;
   cleanup: () => void;
+  processTransportQueue: () => Promise<void>;
   pauseTimeline: () => Promise<void>;
   resumeTimeline: () => Promise<void>;
   setTimelineLoopEnabled: (isEnabled: boolean) => void;
@@ -97,6 +122,9 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   audioContext: null,
   globalGainNode: null,
   discordDestinationNode: null,
+  discordCaptureNode: null,
+  discordSilentGainNode: null,
+  discordConnectionCheckInterval: null,
   channelNodes: new Map(),
   sources: new Map(),
   isInitialized: false,
@@ -111,16 +139,23 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   timelineDurationMs: 60000,
   isTimelineLoopEnabled: false,
   activePlaybackContext: null,
+  transportCommandQueue: [],
+  nextTransportSequence: 0,
+  isTransportProcessingScheduled: false,
+  transportLastAppliedByElement: new Map(),
+  transportLatencySamples: { start: [], pause: [], stop: [] },
+  transportQueueHighWatermark: 0,
 
   setSelectedElementId: id => set({ selectedElementId: id }),
 
   initAudioContext: async () => {
     if (get().audioContext) return;
 
-    const audioContext = new (
+    const AudioContextCtor =
       window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    )();
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+
+    const audioContext = new AudioContextCtor({ sampleRate: 48000 });
 
     if (audioContext.state === 'suspended') {
       await audioContext.resume();
@@ -129,7 +164,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     const { output_device_id } = useSettingsStore.getState().settings;
     const ctx = audioContext as DeviceAudioContext;
 
-    if (output_device_id && typeof ctx.setSinkId === 'function') {
+    if (output_device_id && output_device_id !== 'discord' && typeof ctx.setSinkId === 'function') {
       try {
         await ctx.setSinkId(output_device_id);
       } catch (e) {
@@ -138,15 +173,118 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     }
 
     const globalGainNode = audioContext.createGain();
-    globalGainNode.connect(audioContext.destination);
     globalGainNode.gain.value = get().globalVolume;
 
     let discordDestinationNode: MediaStreamAudioDestinationNode | null = null;
+    let discordCaptureNode: AudioWorkletNode | null = null;
+    let discordSilentGainNode: GainNode | null = null;
+
     if (typeof audioContext.createMediaStreamDestination === 'function') {
       discordDestinationNode = audioContext.createMediaStreamDestination();
-      globalGainNode.connect(discordDestinationNode);
-      // Stub: in a real implemention, we would attach a ScriptProcessorNode or AudioWorkletNode
-      // to discordDestinationNode.stream to get PCM chunks to send over Tauri.
+
+      await audioContext.audioWorklet.addModule('/worklets/discord-capture-processor.js');
+      discordCaptureNode = new AudioWorkletNode(audioContext, 'discord-capture-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        channelCount: 2,
+        channelCountMode: 'explicit',
+        channelInterpretation: 'speakers',
+      });
+
+      discordSilentGainNode = audioContext.createGain();
+      discordSilentGainNode.gain.value = 0;
+
+      const MAX_DISCORD_PCM_QUEUE = 96;
+      const DISCORD_PACE_INTERVAL_MS = 40;
+
+      let discordSendInFlight = false;
+      const discordPcmQueue: number[][] = [];
+      let lastDiscordSendErrorAt = 0;
+
+      const sendNextDiscordPacket = () => {
+        if (discordSendInFlight) {
+          return;
+        }
+
+        if (useSettingsStore.getState().settings.output_device_id !== 'discord') {
+          discordPcmQueue.length = 0;
+          return;
+        }
+
+        const nextPcm = discordPcmQueue.shift();
+        if (!nextPcm) {
+          return;
+        }
+
+        discordSendInFlight = true;
+        invoke('discord_send_audio', { pcmData: nextPcm })
+          .catch(err => {
+            const message = String(err);
+            const isTransientBridgeError =
+              message.includes('Discord audio bridge is disconnected') ||
+              message.includes('Discord audio bridge is not initialized') ||
+              message.includes('Discord voice connection is not active');
+
+            if (!isTransientBridgeError) {
+              console.error('Failed to send audio to Discord:', err);
+              return;
+            }
+
+            const now = Date.now();
+            if (now - lastDiscordSendErrorAt > 3000) {
+              console.warn('Discord stream is reconnecting...');
+              lastDiscordSendErrorAt = now;
+            }
+          })
+          .finally(() => {
+            discordSendInFlight = false;
+          });
+      };
+
+      const discordPaceInterval = window.setInterval(
+        sendNextDiscordPacket,
+        DISCORD_PACE_INTERVAL_MS
+      );
+
+      discordCaptureNode.port.onmessage = event => {
+        if (useSettingsStore.getState().settings.output_device_id !== 'discord') {
+          return;
+        }
+
+        const payload = event.data;
+        if (!(payload instanceof ArrayBuffer)) {
+          return;
+        }
+
+        const packet = Array.from(new Int16Array(payload));
+        if (packet.length === 0) {
+          return;
+        }
+
+        discordPcmQueue.push(packet);
+        if (discordPcmQueue.length > MAX_DISCORD_PCM_QUEUE) {
+          discordPcmQueue.shift();
+        }
+      };
+
+      set({ discordConnectionCheckInterval: discordPaceInterval });
+    }
+
+    try {
+      globalGainNode.disconnect();
+    } catch {
+      // Ignore: no connections yet
+    }
+
+    if (output_device_id === 'discord' && discordCaptureNode) {
+      // When Discord is the output, capture audio via ScriptProcessorNode
+      globalGainNode.connect(discordCaptureNode);
+      discordCaptureNode.connect(discordSilentGainNode!);
+      discordSilentGainNode!.connect(audioContext.destination);
+    } else {
+      // Normal audio output to speakers
+      globalGainNode.connect(audioContext.destination);
     }
 
     const stateSyncInterval = window.setInterval(() => {
@@ -185,7 +323,13 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       stateSyncInterval,
       globalGainNode,
       discordDestinationNode,
+      discordCaptureNode,
+      discordSilentGainNode,
     });
+
+    if (output_device_id === 'discord') {
+      get().setOutputDevice('discord').catch(console.error);
+    }
   },
 
   loadAudioFile: async (element, fileData) => {
@@ -230,95 +374,207 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     }
   },
 
-  play: async elementId => {
-    console.log(`[AudioEngine] Attempting to play element: ${elementId}`);
-    const { audioContext, sources } = get();
-    if (!audioContext) {
-      console.error('[AudioEngine] Cannot play: audioContext is missing');
+  processTransportQueue: async () => {
+    const {
+      transportCommandQueue,
+      transportLastAppliedByElement,
+      transportLatencySamples,
+      audioContext,
+      sources,
+    } = get();
+
+    if (transportCommandQueue.length === 0) {
+      set({ isTransportProcessingScheduled: false });
       return;
     }
 
-    if (audioContext.state === 'suspended') {
-      console.log('[AudioEngine] Resuming suspended audioContext');
-      await audioContext.resume();
-    }
+    set({ transportCommandQueue: [], isTransportProcessingScheduled: false });
 
-    const source = sources.get(elementId);
-    if (!source) {
-      console.error(`[AudioEngine] Cannot play: source ${elementId} not found in store`);
-      return;
-    }
+    const nextAppliedMap = new Map(transportLastAppliedByElement);
+    const nextLatencySamples: TransportLatencySamples = {
+      start: [...transportLatencySamples.start],
+      pause: [...transportLatencySamples.pause],
+      stop: [...transportLatencySamples.stop],
+    };
 
-    if (!source.buffer) {
-      console.error(`[AudioEngine] Cannot play: source ${elementId} has a null audio buffer`);
-      return;
-    }
+    const sortedCommands = [...transportCommandQueue].sort((a, b) => a.sequence - b.sequence);
 
-    if (source.sourceNode) {
-      try {
-        console.log(`[AudioEngine] Stopping existing source node for ${elementId}`);
-        source.sourceNode.stop();
-      } catch (e) {
-        console.warn(`[AudioEngine] Could not stop existing node:`, e);
+    for (const command of sortedCommands) {
+      const lastAppliedSequence = nextAppliedMap.get(command.elementId) ?? 0;
+      if (command.sequence <= lastAppliedSequence) {
+        continue;
       }
+
+      const source = sources.get(command.elementId);
+      if (!source) {
+        nextAppliedMap.set(command.elementId, command.sequence);
+        continue;
+      }
+
+      if (command.intent === 'start') {
+        if (!audioContext) {
+          nextAppliedMap.set(command.elementId, command.sequence);
+          continue;
+        }
+
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+        }
+
+        if (!source.buffer) {
+          nextAppliedMap.set(command.elementId, command.sequence);
+          continue;
+        }
+
+        if (source.sourceNode) {
+          try {
+            source.sourceNode.stop();
+          } catch {
+            // Ignore
+          }
+        }
+
+        try {
+          const sourceNode = audioContext.createBufferSource();
+          sourceNode.buffer = source.buffer;
+          sourceNode.loop = source.isLooping;
+          sourceNode.connect(source.gainNode);
+          sourceNode.start();
+
+          source.sourceNode = sourceNode;
+          source.isPlaying = true;
+
+          sourceNode.onended = () => {
+            if (!sourceNode.loop) {
+              source.isPlaying = source.activeScheduledCount > 0;
+              source.sourceNode = null;
+              set({ sources: new Map(get().sources) });
+            }
+          };
+        } catch (error) {
+          console.error(
+            `[AudioEngine] Fatal error during playback for ${command.elementId}:`,
+            error
+          );
+        }
+      } else {
+        if (source.sourceNode) {
+          try {
+            source.sourceNode.stop();
+          } catch {
+            // Ignore
+          }
+          source.sourceNode = null;
+          source.isPlaying = source.activeScheduledCount > 0;
+        }
+      }
+
+      const latencyMs = performance.now() - command.enqueuedAtMs;
+      nextLatencySamples[command.intent].push(latencyMs);
+      if (nextLatencySamples[command.intent].length > 120) {
+        nextLatencySamples[command.intent].shift();
+      }
+
+      nextAppliedMap.set(command.elementId, command.sequence);
     }
 
-    try {
-      console.log(`[AudioEngine] Creating new BufferSource for ${elementId}`);
-      const sourceNode = audioContext.createBufferSource();
-      sourceNode.buffer = source.buffer;
-      sourceNode.loop = source.isLooping;
-      sourceNode.connect(source.gainNode);
+    set({
+      sources: new Map(sources),
+      transportLastAppliedByElement: nextAppliedMap,
+      transportLatencySamples: nextLatencySamples,
+    });
+  },
 
-      console.log(`[AudioEngine] Starting source node for ${elementId}...`);
-      sourceNode.start();
+  play: async elementId => {
+    const {
+      transportCommandQueue,
+      nextTransportSequence,
+      isTransportProcessingScheduled,
+      transportQueueHighWatermark,
+    } = get();
 
-      source.sourceNode = sourceNode;
-      source.isPlaying = true;
+    const sequence = nextTransportSequence + 1;
+    const queue = transportCommandQueue.filter(command => command.elementId !== elementId);
+    queue.push({
+      sequence,
+      elementId,
+      intent: 'start',
+      enqueuedAtMs: performance.now(),
+    });
 
-      sourceNode.onended = () => {
-        console.log(`[AudioEngine] Track ended for ${elementId} (loop=${sourceNode.loop})`);
-        if (!sourceNode.loop) {
-          source.isPlaying = source.activeScheduledCount > 0;
-          source.sourceNode = null;
-          set({ sources: new Map(sources) });
-        }
-      };
+    set({
+      transportCommandQueue: queue,
+      nextTransportSequence: sequence,
+      transportQueueHighWatermark: Math.max(transportQueueHighWatermark, queue.length),
+    });
 
-      set({ sources: new Map(sources) });
-      console.log(`[AudioEngine] Successfully started playback for ${elementId}`);
-    } catch (e) {
-      console.error(`[AudioEngine] Fatal error during playback for ${elementId}:`, e);
+    if (!isTransportProcessingScheduled) {
+      set({ isTransportProcessingScheduled: true });
+      globalThis.setTimeout(() => {
+        void get().processTransportQueue();
+      }, 0);
     }
   },
 
   pause: elementId => {
-    const { sources } = get();
-    const source = sources.get(elementId);
-    if (source?.sourceNode) {
-      try {
-        source.sourceNode.stop();
-        source.sourceNode = null;
-        source.isPlaying = source.activeScheduledCount > 0;
-        set({ sources: new Map(sources) });
-      } catch {
-        // Ignore errors
-      }
+    const {
+      transportCommandQueue,
+      nextTransportSequence,
+      isTransportProcessingScheduled,
+      transportQueueHighWatermark,
+    } = get();
+
+    const sequence = nextTransportSequence + 1;
+    const queue = transportCommandQueue.filter(command => command.elementId !== elementId);
+    queue.push({
+      sequence,
+      elementId,
+      intent: 'pause',
+      enqueuedAtMs: performance.now(),
+    });
+
+    set({
+      transportCommandQueue: queue,
+      nextTransportSequence: sequence,
+      transportQueueHighWatermark: Math.max(transportQueueHighWatermark, queue.length),
+    });
+
+    if (!isTransportProcessingScheduled) {
+      set({ isTransportProcessingScheduled: true });
+      globalThis.setTimeout(() => {
+        void get().processTransportQueue();
+      }, 0);
     }
   },
 
   stop: elementId => {
-    const { sources } = get();
-    const source = sources.get(elementId);
-    if (source?.sourceNode) {
-      try {
-        source.sourceNode.stop();
-      } catch {
-        // Ignore
-      }
-      source.sourceNode = null;
-      source.isPlaying = source.activeScheduledCount > 0;
-      set({ sources: new Map(sources) });
+    const {
+      transportCommandQueue,
+      nextTransportSequence,
+      isTransportProcessingScheduled,
+      transportQueueHighWatermark,
+    } = get();
+
+    const sequence = nextTransportSequence + 1;
+    const queue = transportCommandQueue.filter(command => command.elementId !== elementId);
+    queue.push({
+      sequence,
+      elementId,
+      intent: 'stop',
+      enqueuedAtMs: performance.now(),
+    });
+
+    set({
+      transportCommandQueue: queue,
+      nextTransportSequence: sequence,
+      transportQueueHighWatermark: Math.max(transportQueueHighWatermark, queue.length),
+    });
+
+    if (!isTransportProcessingScheduled) {
+      set({ isTransportProcessingScheduled: true });
+      globalThis.setTimeout(() => {
+        void get().processTransportQueue();
+      }, 0);
     }
   },
 
@@ -354,6 +610,8 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       timelineStartTimeContext: null,
       isTimelineLoopEnabled: false,
       activePlaybackContext: null,
+      transportCommandQueue: [],
+      isTransportProcessingScheduled: false,
     });
   },
 
@@ -386,9 +644,47 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   setOutputDevice: async deviceId => {
-    const { audioContext } = get();
+    const {
+      audioContext,
+      globalGainNode,
+      discordCaptureNode,
+      discordSilentGainNode,
+      discordConnectionCheckInterval,
+    } = get();
 
     const prevDeviceId = useSettingsStore.getState().settings.output_device_id;
+
+    if (globalGainNode && audioContext) {
+      // Disconnect all existing outputs from globalGainNode
+      try {
+        globalGainNode.disconnect();
+      } catch {
+        // Ignore when there are no active connections
+      }
+
+      if (deviceId === 'discord' && discordCaptureNode && discordSilentGainNode) {
+        // Discord mode: route audio through the ScriptProcessorNode for PCM capture.
+        // The ScriptProcessorNode MUST have a path to audioContext.destination
+        // for onaudioprocess to fire, so we route through a silent gain node.
+        // Chain: globalGainNode → captureNode → silentGainNode(0) → destination
+        globalGainNode.connect(discordCaptureNode);
+        try {
+          discordCaptureNode.disconnect();
+        } catch {
+          /* ignore */
+        }
+        discordCaptureNode.connect(discordSilentGainNode);
+        try {
+          discordSilentGainNode.disconnect();
+        } catch {
+          /* ignore */
+        }
+        discordSilentGainNode.connect(audioContext.destination);
+      } else {
+        // Normal mode: route directly to speakers
+        globalGainNode.connect(audioContext.destination);
+      }
+    }
 
     if (deviceId === 'discord') {
       try {
@@ -401,14 +697,27 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
             channelId: discord_channel_id,
           });
         } else {
-          console.warn('Discord not fully configured');
+          console.info('Discord output requires bot token, guild and voice channel configuration.');
         }
       } catch (err) {
         console.error('Failed to connect to Discord:', err);
+        if (globalGainNode && audioContext) {
+          try {
+            globalGainNode.disconnect();
+          } catch {
+            // Ignore
+          }
+          globalGainNode.connect(audioContext.destination);
+        }
       }
       return;
     } else if (prevDeviceId === 'discord') {
       invoke('discord_disconnect').catch(console.error);
+      // Clear the Discord connection check interval when disconnecting
+      if (discordConnectionCheckInterval !== null) {
+        clearInterval(discordConnectionCheckInterval);
+        set({ discordConnectionCheckInterval: null });
+      }
     }
 
     interface DeviceAudioContext extends AudioContext {
@@ -454,10 +763,23 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   cleanup: () => {
-    const { audioContext, sources, activeTrackTimeouts, globalGainNode, channelNodes } = get();
+    const {
+      audioContext,
+      sources,
+      activeTrackTimeouts,
+      globalGainNode,
+      channelNodes,
+      discordCaptureNode,
+      discordSilentGainNode,
+      discordConnectionCheckInterval,
+    } = get();
 
     activeTrackTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
     set({ activeTrackTimeouts: new Map() });
+
+    if (discordConnectionCheckInterval !== null) {
+      clearInterval(discordConnectionCheckInterval);
+    }
 
     sources.forEach(source => {
       if (source.sourceNode) {
@@ -479,6 +801,11 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     });
 
     channelNodes.forEach(node => node.disconnect());
+    if (discordCaptureNode) {
+      discordCaptureNode.port.onmessage = null;
+      discordCaptureNode.disconnect();
+    }
+    discordSilentGainNode?.disconnect();
     globalGainNode?.disconnect();
 
     const { stateSyncInterval } = get();
@@ -490,6 +817,10 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
     set({
       audioContext: null,
       globalGainNode: null,
+      discordDestinationNode: null,
+      discordCaptureNode: null,
+      discordSilentGainNode: null,
+      discordConnectionCheckInterval: null,
       channelNodes: new Map(),
       sources: new Map(),
       isInitialized: false,
@@ -501,6 +832,12 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       timelineStartTimeContext: null,
       isTimelineLoopEnabled: false,
       activePlaybackContext: null,
+      transportCommandQueue: [],
+      nextTransportSequence: 0,
+      isTransportProcessingScheduled: false,
+      transportLastAppliedByElement: new Map(),
+      transportLatencySamples: { start: [], pause: [], stop: [] },
+      transportQueueHighWatermark: 0,
     });
   },
 

@@ -107,7 +107,45 @@ export const useSoundSetStore = create<SoundSetState>()(
         try {
           const soundSets = await invoke<SoundSet[]>('get_sound_sets');
           console.log('Store: Loaded', soundSets.length, 'soundsets');
-          set({ soundSets, isLoading: false });
+
+          // Restore selection from persisted state
+          const state = get();
+          let restoredSelectedSoundSet = state.selectedSoundSet;
+          let restoredSelectedSoundSetIds = state.selectedSoundSetIds;
+
+          // If we have persisted selected IDs, filter only those that exist in loaded soundsets
+          if (state.selectedSoundSetIds.length > 0) {
+            const validIds = state.selectedSoundSetIds.filter(id =>
+              soundSets.some(ss => ss.id === id)
+            );
+            restoredSelectedSoundSetIds = validIds;
+
+            // Restore selectedSoundSet if it exists in the loaded soundsets
+            if (state.selectedSoundSet) {
+              const stillExists = soundSets.find(ss => ss.id === state.selectedSoundSet?.id);
+              restoredSelectedSoundSet = stillExists || null;
+            }
+
+            // If no primary selection but we have valid IDs, select the first one
+            if (!restoredSelectedSoundSet && validIds.length > 0) {
+              restoredSelectedSoundSet = soundSets.find(ss => ss.id === validIds[0]) || null;
+            }
+          }
+
+          set({
+            soundSets,
+            selectedSoundSet: restoredSelectedSoundSet,
+            selectedSoundSetIds: restoredSelectedSoundSetIds,
+            isLoading: false,
+          });
+
+          // Load audio elements for restored selections
+          if (restoredSelectedSoundSetIds.length > 0) {
+            get().loadAudioElements();
+            if (restoredSelectedSoundSet) {
+              get().loadChannels(restoredSelectedSoundSet.id);
+            }
+          }
 
           // Load global assets
           get().loadMoods();

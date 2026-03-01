@@ -1,16 +1,27 @@
 import { useEffect, useState } from 'react';
 
 export function useAudioDevices() {
+  const supportsEnumerateDevices =
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.enumerateDevices === 'function';
+
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    supportsEnumerateDevices
+      ? null
+      : 'Audio device enumeration is not supported in this environment.'
+  );
 
   useEffect(() => {
+    if (!supportsEnumerateDevices) {
+      return;
+    }
+
     let mounted = true;
 
     async function loadDevices() {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
-
         const allDevices = await navigator.mediaDevices.enumerateDevices();
         const audioOutputs = allDevices.filter(d => d.kind === 'audiooutput');
 
@@ -20,11 +31,17 @@ export function useAudioDevices() {
         }
       } catch (err) {
         if (mounted) {
-          console.warn('Failed to enumerate audio devices or get permission:', err);
-          setError(String(err));
-          const allDevices = await navigator.mediaDevices.enumerateDevices();
-          const audioOutputs = allDevices.filter(d => d.kind === 'audiooutput');
-          setDevices(audioOutputs);
+          const isPermissionDenied =
+            err instanceof DOMException &&
+            (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+
+          if (isPermissionDenied) {
+            setError('Audio device permission is blocked. Using system default output.');
+          } else {
+            setError(String(err));
+          }
+
+          setDevices([]);
         }
       }
     }
@@ -36,7 +53,7 @@ export function useAudioDevices() {
       mounted = false;
       navigator.mediaDevices.removeEventListener('devicechange', loadDevices);
     };
-  }, []);
+  }, [supportsEnumerateDevices]);
 
   return { devices, error };
 }

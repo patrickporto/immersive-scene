@@ -1,16 +1,35 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
+import { invoke } from '@tauri-apps/api/core';
 import { Activity, Volume2, VolumeX, ChevronDown, ChevronUp } from 'lucide-react';
 
+import { DiscordQuickSelector } from './DiscordQuickSelector';
+import { DiscordTelemetry } from './DiscordTelemetry';
 import { MasterControls } from './MasterControls';
 import { Cluster } from '../../../shared/components/layout/Cluster';
 import { Stack } from '../../../shared/components/layout/Stack';
 import { OutputDevicePicker } from '../../audio-engine/components/OutputDevicePicker';
 import { useAudioEngineStore } from '../../audio-engine/stores/audioEngineStore';
+import { useSettingsStore } from '../../settings/stores/settingsStore';
 import { useSoundSetStore } from '../../sound-sets/stores/soundSetStore';
 import { useTimelineStore } from '../../sound-sets/stores/timelineStore';
 
+interface DiscordStreamTelemetry {
+  connected: boolean;
+  bridge_ready: boolean;
+  bridge_connected: boolean;
+  chunks_sent: number;
+  chunks_dropped: number;
+  queue_depth: number;
+  queue_capacity: number;
+  underruns: number;
+  dropped_frames: number;
+  reconnect_attempts: number;
+  last_error: string | null;
+}
+
 export function BottomPlayer() {
+  const { settings } = useSettingsStore();
   const { selectedSoundSet, selectedMood, soundSets, moods } = useSoundSetStore();
   const {
     selectedTimelineId,
@@ -37,6 +56,38 @@ export function BottomPlayer() {
 
   const [isMasterMuted, setIsMasterMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(1);
+  const [discordTelemetry, setDiscordTelemetry] = useState<DiscordStreamTelemetry | null>(null);
+
+  useEffect(() => {
+    if (settings.output_device_id !== 'discord') {
+      return;
+    }
+
+    let mounted = true;
+
+    const pollTelemetry = async () => {
+      try {
+        const telemetry = await invoke<DiscordStreamTelemetry>('discord_get_stream_telemetry');
+        if (mounted) {
+          setDiscordTelemetry(telemetry);
+        }
+      } catch {
+        if (mounted) {
+          setDiscordTelemetry(null);
+        }
+      }
+    };
+
+    pollTelemetry().catch(() => null);
+    const interval = window.setInterval(() => {
+      pollTelemetry().catch(() => null);
+    }, 1000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [settings.output_device_id]);
 
   // Derive playing status
   const playingCount = Array.from(sources.values()).filter(s => s.isPlaying).length;
@@ -220,6 +271,10 @@ export function BottomPlayer() {
               onChange={e => handleVolumeChange(parseInt(e.target.value))}
               className="w-20 md:w-28 accent-cyan-500 bg-black/40 h-1.5 rounded-lg appearance-none cursor-pointer flex-shrink-0 border border-white/5"
             />
+            {settings.output_device_id === 'discord' && <DiscordQuickSelector />}
+            {settings.output_device_id === 'discord' && (
+              <DiscordTelemetry telemetry={discordTelemetry} />
+            )}
             <OutputDevicePicker />
           </Cluster>
         </Cluster>
