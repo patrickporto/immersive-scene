@@ -23,6 +23,7 @@ const MAX_QUEUE = 192;
 const PCM_BYTES_PER_SAMPLE = 2;
 const EXPECTED_PACKET_SAMPLES = FRAME_SIZE * CHANNELS * 2;
 const FRAME_BYTES = FRAME_SIZE * CHANNELS * PCM_BYTES_PER_SAMPLE;
+const START_BUFFER_FRAMES = 4;
 
 /** @type {Client | null} */
 let client = null;
@@ -37,6 +38,7 @@ let pcmInput = null;
 let opusEncoder = null;
 /** @type {NodeJS.Timeout | null} */
 let pumpInterval = null;
+let playbackPrimed = false;
 
 /** @type {Buffer[]} */
 const pcmQueue = [];
@@ -130,11 +132,22 @@ function ensureAudioPipeline() {
       return;
     }
 
+    if (!playbackPrimed) {
+      if (pcmQueue.length >= START_BUFFER_FRAMES) {
+        playbackPrimed = true;
+      } else {
+        telemetry.queueDepth = pcmQueue.length;
+        pcmInput.write(silenceChunk);
+        return;
+      }
+    }
+
     const next = pcmQueue.shift();
     telemetry.queueDepth = pcmQueue.length;
 
     if (!next) {
       telemetry.underruns += 1;
+      playbackPrimed = false;
       pcmInput.write(silenceChunk);
       return;
     }
@@ -165,7 +178,7 @@ async function ensureClient(token) {
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Discord ready timeout')), 15000);
 
-    client.once('ready', () => {
+    client.once('clientReady', () => {
       clearTimeout(timeout);
       resolve();
     });
@@ -240,6 +253,7 @@ async function handleConnect(payload) {
 
   pcmQueue.length = 0;
   telemetry.queueDepth = 0;
+  playbackPrimed = false;
 
   telemetry.connected = true;
   telemetry.guildId = guildId;
@@ -255,6 +269,7 @@ async function handleDisconnect() {
   telemetry.channelId = null;
   pcmQueue.length = 0;
   telemetry.queueDepth = 0;
+  playbackPrimed = false;
 }
 
 function handleSendPcm(payload) {

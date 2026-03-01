@@ -82,6 +82,7 @@ interface AudioEngineState {
   isTimelinePlaying: boolean;
   isTimelinePaused: boolean;
   timelineStartTimeContext: number | null;
+  timelinePauseTimeContext: number | null;
   timelineDurationMs: number;
   isTimelineLoopEnabled: boolean;
   activePlaybackContext: PlaybackContext | null;
@@ -136,6 +137,7 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   isTimelinePlaying: false,
   isTimelinePaused: false,
   timelineStartTimeContext: null,
+  timelinePauseTimeContext: null,
   timelineDurationMs: 60000,
   isTimelineLoopEnabled: false,
   activePlaybackContext: null,
@@ -842,11 +844,34 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   pauseTimeline: async () => {
-    const { audioContext, isTimelinePlaying, isTimelinePaused } = get();
+    const {
+      audioContext,
+      isTimelinePlaying,
+      isTimelinePaused,
+      discordCaptureNode,
+      discordSilentGainNode,
+    } = get();
     if (audioContext && isTimelinePlaying && !isTimelinePaused) {
       try {
+        // Disconnect Discord capture node before suspending to prevent UI blocking
+        // The AudioWorkletNode processing can block suspend() when under heavy load
+        if (discordCaptureNode && discordSilentGainNode) {
+          try {
+            discordCaptureNode.disconnect();
+            discordSilentGainNode.disconnect();
+          } catch {
+            // Ignore disconnect errors
+          }
+        }
+
+        // Save the current audio context time when pausing
+        const pauseTime = audioContext.currentTime;
         await audioContext.suspend();
-        set({ isTimelinePaused: true, isTimelinePlaying: true });
+        set({
+          isTimelinePaused: true,
+          isTimelinePlaying: true,
+          timelinePauseTimeContext: pauseTime,
+        });
       } catch (error) {
         console.error('Failed to pause timeline:', error);
       }
@@ -854,11 +879,50 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
   },
 
   resumeTimeline: async () => {
-    const { audioContext, isTimelinePlaying, isTimelinePaused } = get();
+    const {
+      audioContext,
+      isTimelinePlaying,
+      isTimelinePaused,
+      globalGainNode,
+      discordCaptureNode,
+      discordSilentGainNode,
+      timelineStartTimeContext,
+      timelinePauseTimeContext,
+    } = get();
     if (audioContext && isTimelinePlaying && isTimelinePaused) {
       try {
         await audioContext.resume();
-        set({ isTimelinePaused: false, isTimelinePlaying: true });
+
+        // Reconnect Discord capture node after resuming
+        if (
+          discordCaptureNode &&
+          discordSilentGainNode &&
+          globalGainNode &&
+          useSettingsStore.getState().settings.output_device_id === 'discord'
+        ) {
+          try {
+            globalGainNode.connect(discordCaptureNode);
+            discordCaptureNode.connect(discordSilentGainNode);
+            discordSilentGainNode.connect(audioContext.destination);
+          } catch (e) {
+            console.warn('Failed to reconnect Discord capture node:', e);
+          }
+        }
+
+        // Adjust timeline start time to compensate for the paused duration
+        // This ensures the timeline continues from where it left off
+        let newStartTimeContext = timelineStartTimeContext;
+        if (timelineStartTimeContext !== null && timelinePauseTimeContext !== null) {
+          const pausedDuration = audioContext.currentTime - timelinePauseTimeContext;
+          newStartTimeContext = timelineStartTimeContext + pausedDuration;
+        }
+
+        set({
+          isTimelinePaused: false,
+          isTimelinePlaying: true,
+          timelineStartTimeContext: newStartTimeContext,
+          timelinePauseTimeContext: null,
+        });
       } catch (error) {
         console.error('Failed to resume timeline:', error);
       }
@@ -1060,7 +1124,11 @@ export const useAudioEngineStore = create<AudioEngineState>((set, get) => ({
       const anyLooping = tracks.some(t => t.is_looping);
       if (!anyLooping && maxEndMs > 0) {
         const timeoutId = setTimeout(() => {
-          set({ isTimelinePlaying: false, timelineStartTimeContext: null });
+          set({
+            isTimelinePlaying: false,
+            timelineStartTimeContext: null,
+            timelinePauseTimeContext: null,
+          });
         }, maxEndMs);
         const ct = get().activeTrackTimeouts;
         ct.set(-1, timeoutId as unknown as number);
