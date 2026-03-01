@@ -29,7 +29,9 @@ interface ElementGroupCardProps {
 export function ElementGroupCard({ group, members, audioElements, mode }: ElementGroupCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { renameGroup, deleteGroup, removeElementFromGroup } = useElementGroupStore();
-  const { play, pause, stop, sources } = useAudioEngineStore();
+  const play = useAudioEngineStore(state => state.play);
+  const pause = useAudioEngineStore(state => state.pause);
+  const stop = useAudioEngineStore(state => state.stop);
   const { channels, setChannelVolume } = useMixerStore();
   const { soundSets } = useSoundSetStore();
   const { success, error } = useToast();
@@ -43,18 +45,16 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
       .filter((a): a is AudioElement => a !== undefined);
   }, [members, audioElements]);
 
-  // Determine if any member is currently playing
-  const playingMemberSet = useMemo(() => {
-    const playingIds = new Set<number>();
-    for (const el of memberElements) {
-      if (sources.get(el.id)?.isPlaying) {
-        playingIds.add(el.id);
-      }
-    }
-    return playingIds;
-  }, [memberElements, sources]);
+  const isPlaying = useAudioEngineStore(state =>
+    memberElements.some(element => state.sources.get(element.id)?.isPlaying)
+  );
 
-  const isPlaying = playingMemberSet.size > 0;
+  const getPlayingMemberIds = () => {
+    const currentSources = useAudioEngineStore.getState().sources;
+    return memberElements
+      .filter(element => currentSources.get(element.id)?.isPlaying)
+      .map(element => element.id);
+  };
 
   // We need to use the first element's channel type for volume control as a simplification
   const primaryChannelType = memberElements[0]?.channel_type || 'sfx';
@@ -67,7 +67,7 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
   const handleDelete = async () => {
     try {
       if (mode === 'mixing') {
-        playingMemberSet.forEach(id => stop(id));
+        getPlayingMemberIds().forEach(id => stop(id));
       }
       await deleteGroup(group.id);
       success(`Grupo "${group.name}" removido`);
@@ -94,7 +94,7 @@ export function ElementGroupCard({ group, members, audioElements, mode }: Elemen
     }
 
     if (isPlaying && mode !== 'one-shot') {
-      playingMemberSet.forEach(id => pause(id));
+      getPlayingMemberIds().forEach(id => pause(id));
       return;
     }
 

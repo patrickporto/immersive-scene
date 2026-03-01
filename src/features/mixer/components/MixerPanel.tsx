@@ -34,7 +34,12 @@ export function MixerPanel({ isCollapsed = false }: MixerPanelProps) {
     resetMixer,
   } = useMixerStore();
 
-  const { selectedElementId, sources, setVolume, toggleLoop } = useAudioEngineStore();
+  const selectedElementId = useAudioEngineStore(state => state.selectedElementId);
+  const selectedSource = useAudioEngineStore(state =>
+    selectedElementId ? state.sources.get(selectedElementId) || null : null
+  );
+  const setVolume = useAudioEngineStore(state => state.setVolume);
+  const toggleLoop = useAudioEngineStore(state => state.toggleLoop);
   const [activeTab, setActiveTab] = useState<'mixer' | 'inspector'>('mixer');
 
   const prevSelectedElementId = useRef<number | null>(null);
@@ -48,7 +53,6 @@ export function MixerPanel({ isCollapsed = false }: MixerPanelProps) {
   }, [selectedElementId]);
 
   const hasSolo = Object.values(channels).some(channel => channel.solo);
-  const selectedSource = selectedElementId ? sources.get(selectedElementId) || null : null;
 
   if (isCollapsed) {
     return (

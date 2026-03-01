@@ -25,7 +25,7 @@ describe('audioEngineStore scheduling', () => {
       transportLatencySamples: { start: [], pause: [], stop: [] },
       transportQueueHighWatermark: 0,
       isEverythingPaused: false,
-      pausedElementsOffset: new Map(),
+      pausedLoopingElements: new Set(),
       pauseResumeTargetState: null,
       pauseResumeTransition: 'idle',
       activeQlcCueTimeouts: [],
@@ -77,8 +77,8 @@ describe('audioEngineStore scheduling', () => {
     vi.advanceTimersByTime(100);
 
     expect(playScheduledMock).toHaveBeenCalledTimes(2);
-    expect(playScheduledMock).toHaveBeenCalledWith(1, 0, 2000, 2);
-    expect(playScheduledMock).toHaveBeenCalledWith(2, 3000, 1500, 0);
+    expect(playScheduledMock).toHaveBeenCalledWith(1, 0, 2000, 2, 0);
+    expect(playScheduledMock).toHaveBeenCalledWith(2, 3000, 1500, 0, 0);
 
     // It should have set active track timeouts
     const state = useAudioEngineStore.getState();
@@ -269,7 +269,7 @@ describe('audioEngineStore scheduling', () => {
     expect(startSamples[0]).toBeLessThan(100);
   });
 
-  it('disconnects discord capture path before suspending on pauseAll', async () => {
+  it('disconnects discord capture path and performs soft pause on pauseAll', async () => {
     const suspend = vi.fn().mockResolvedValue(undefined);
     const discordCaptureNode = { disconnect: vi.fn() } as unknown as AudioWorkletNode;
     const discordSilentGainNode = { disconnect: vi.fn() } as unknown as GainNode;
@@ -289,10 +289,7 @@ describe('audioEngineStore scheduling', () => {
 
     expect(discordCaptureNode.disconnect).toHaveBeenCalled();
     expect(discordSilentGainNode.disconnect).toHaveBeenCalled();
-    expect(suspend).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(discordCaptureNode.disconnect).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(suspend).mock.invocationCallOrder[0]
-    );
+    expect(suspend).not.toHaveBeenCalled();
   });
 
   it('resumes paused sources in non-blocking batches', async () => {
@@ -306,11 +303,11 @@ describe('audioEngineStore scheduling', () => {
       buffer: null,
     }));
 
-    const pausedOffsets = new Map<number, number>();
+    const pausedLoopingElements = new Set<number>();
     const sources = new Map();
 
     for (let id = 1; id <= 15; id += 1) {
-      pausedOffsets.set(id, 0.5);
+      pausedLoopingElements.add(id);
       sources.set(id, {
         element: {} as never,
         buffer: {} as AudioBuffer,
@@ -332,7 +329,7 @@ describe('audioEngineStore scheduling', () => {
       } as unknown as AudioContext,
       sources,
       isEverythingPaused: true,
-      pausedElementsOffset: pausedOffsets,
+      pausedLoopingElements,
       isTimelinePlaying: false,
       isTimelinePaused: false,
       timelineStartTimeContext: null,
@@ -370,11 +367,11 @@ describe('audioEngineStore scheduling', () => {
       buffer: null,
     }));
 
-    const pausedOffsets = new Map<number, number>();
+    const pausedLoopingElements = new Set<number>();
     const sources = new Map();
 
     for (let id = 1; id <= 20; id += 1) {
-      pausedOffsets.set(id, 0.25);
+      pausedLoopingElements.add(id);
       sources.set(id, {
         element: {} as never,
         buffer: {} as AudioBuffer,
@@ -397,7 +394,7 @@ describe('audioEngineStore scheduling', () => {
       } as unknown as AudioContext,
       sources,
       isEverythingPaused: true,
-      pausedElementsOffset: pausedOffsets,
+      pausedLoopingElements,
       isTimelinePlaying: false,
       isTimelinePaused: false,
       timelineStartTimeContext: null,
@@ -416,7 +413,7 @@ describe('audioEngineStore scheduling', () => {
     const state = useAudioEngineStore.getState();
     expect(state.isEverythingPaused).toBe(true);
     expect(state.pauseResumeTransition).toBe('idle');
-    expect(suspend).toHaveBeenCalled();
+    expect(suspend).not.toHaveBeenCalled();
   });
 
   it('schedules QLC+ cue execution from timeline', async () => {

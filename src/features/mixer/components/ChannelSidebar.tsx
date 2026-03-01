@@ -17,7 +17,7 @@ export function getChannelIcon(iconId: string) {
 
 export default function ChannelSidebar() {
   const { channels, selectedSoundSet } = useSoundSetStore();
-  const { setChannelVolume } = useAudioEngineStore();
+  const setChannelVolume = useAudioEngineStore(state => state.setChannelVolume);
 
   if (!selectedSoundSet) return null;
 

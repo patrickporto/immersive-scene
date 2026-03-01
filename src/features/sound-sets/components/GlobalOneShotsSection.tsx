@@ -19,7 +19,8 @@ const VALID_EXTENSIONS = ['.ogg', '.mp3', '.wav', '.flac'];
 export function GlobalOneShotsSection() {
   const { globalOneShots, loadGlobalOneShots, createGlobalOneShot } = useGlobalOneShotStore();
   const { groups, groupMembers, loadGroups } = useElementGroupStore();
-  const { initAudioContext, loadAudioFile } = useAudioEngineStore();
+  const initAudioContext = useAudioEngineStore(state => state.initAudioContext);
+  const loadAudioFile = useAudioEngineStore(state => state.loadAudioFile);
   const { success, error } = useToast();
   const [isUploading, setIsUploading] = useState(false);
 

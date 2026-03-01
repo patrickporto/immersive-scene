@@ -38,14 +38,12 @@ export function TimelineEditor({ moodId }: TimelineEditorProps) {
   } = useTimelineStore();
 
   const { audioElements } = useSoundSetStore();
-  const {
-    stopAll,
-    audioContext,
-    isTimelinePlaying,
-    isTimelinePaused,
-    timelineStartTimeContext,
-    activePlaybackContext,
-  } = useAudioEngineStore();
+  const stopAll = useAudioEngineStore(state => state.stopAll);
+  const audioContext = useAudioEngineStore(state => state.audioContext);
+  const isTimelinePlaying = useAudioEngineStore(state => state.isTimelinePlaying);
+  const isTimelinePaused = useAudioEngineStore(state => state.isTimelinePaused);
+  const timelineStartTimeContext = useAudioEngineStore(state => state.timelineStartTimeContext);
+  const activePlaybackContext = useAudioEngineStore(state => state.activePlaybackContext);
 
   const [currentPlaybackMs, setCurrentPlaybackMs] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);

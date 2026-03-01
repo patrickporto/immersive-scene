@@ -11,7 +11,8 @@ import { useAudioEngineStore } from '../stores/audioEngineStore';
  */
 export function usePreloadAudioElements() {
   const { audioElements } = useSoundSetStore();
-  const { initAudioContext, loadAudioFile } = useAudioEngineStore();
+  const initAudioContext = useAudioEngineStore(state => state.initAudioContext);
+  const loadAudioFile = useAudioEngineStore(state => state.loadAudioFile);
 
   useEffect(() => {
     const loadMissingAudio = async () => {

@@ -15,7 +15,8 @@ const VALID_EXTENSIONS = ['.ogg', '.mp3', '.wav', '.flac'];
  */
 export function useAudioUploader() {
   const { createAudioElement, loadAudioElements } = useSoundSetStore();
-  const { initAudioContext, loadAudioFile } = useAudioEngineStore();
+  const initAudioContext = useAudioEngineStore(state => state.initAudioContext);
+  const loadAudioFile = useAudioEngineStore(state => state.loadAudioFile);
   const { success, error } = useToast();
   const [isUploading, setIsUploading] = useState(false);
 

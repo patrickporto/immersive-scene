@@ -23,7 +23,7 @@ import { useToast } from './shared/hooks/useToast';
 export default function App() {
   const { loadSoundSets, selectedSoundSet, selectedMood, isLoading, soundSets, error } =
     useSoundSetStore();
-  const { initAudioContext } = useAudioEngineStore();
+  const initAudioContext = useAudioEngineStore(state => state.initAudioContext);
   const { loadSettings, settings } = useSettingsStore();
   const { success, error: toastError } = useToast();
 

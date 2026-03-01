@@ -26,18 +26,20 @@ interface AudioElementCardProps {
  * @returns Audio element card.
  */
 export function AudioElementCard({ element, mode, isCombineTarget }: AudioElementCardProps) {
-  const { play, pause, stop, sources, toggleLoop, selectedElementId, setSelectedElementId } =
-    useAudioEngineStore();
+  const play = useAudioEngineStore(state => state.play);
+  const pause = useAudioEngineStore(state => state.pause);
+  const stop = useAudioEngineStore(state => state.stop);
+  const toggleLoop = useAudioEngineStore(state => state.toggleLoop);
+  const selectedElementId = useAudioEngineStore(state => state.selectedElementId);
+  const setSelectedElementId = useAudioEngineStore(state => state.setSelectedElementId);
+  const isPlaying = useAudioEngineStore(state => state.sources.get(element.id)?.isPlaying ?? false);
+  const isLooping = useAudioEngineStore(state => state.sources.get(element.id)?.isLooping ?? false);
   const { renameAudioElement, deleteAudioElement, loadAudioElements, selectedMood, soundSets } =
     useSoundSetStore();
   const { channels, setChannelVolume } = useMixerStore();
   const { success, error } = useToast();
 
   const sourceSoundSet = soundSets.find(s => s.id === element.sound_set_id);
-
-  const source = sources.get(element.id);
-  const isPlaying = source?.isPlaying || false;
-  const isLooping = source?.isLooping || false;
 
   const channelInfo = channels[element.channel_type as ChannelType] || {
     volume: 80,

@@ -40,21 +40,27 @@ export function BottomPlayer() {
     isExpanded,
     setIsExpanded,
   } = useTimelineStore();
-  const {
-    sources,
-    stopAll,
-    startTimeline,
-    crossfadeToTimeline,
-    globalVolume,
-    setGlobalVolume,
-    isTimelinePlaying,
-    isTimelinePaused,
-    isEverythingPaused,
-    pauseAll,
-    resumeAll,
-    activePlaybackContext,
-    setTimelineLoopEnabled,
-  } = useAudioEngineStore();
+  const playingCount = useAudioEngineStore(state => {
+    let count = 0;
+    state.sources.forEach(source => {
+      if (source.isPlaying) {
+        count += 1;
+      }
+    });
+    return count;
+  });
+  const stopAll = useAudioEngineStore(state => state.stopAll);
+  const startTimeline = useAudioEngineStore(state => state.startTimeline);
+  const crossfadeToTimeline = useAudioEngineStore(state => state.crossfadeToTimeline);
+  const globalVolume = useAudioEngineStore(state => state.globalVolume);
+  const setGlobalVolume = useAudioEngineStore(state => state.setGlobalVolume);
+  const isTimelinePlaying = useAudioEngineStore(state => state.isTimelinePlaying);
+  const isTimelinePaused = useAudioEngineStore(state => state.isTimelinePaused);
+  const isEverythingPaused = useAudioEngineStore(state => state.isEverythingPaused);
+  const pauseAll = useAudioEngineStore(state => state.pauseAll);
+  const resumeAll = useAudioEngineStore(state => state.resumeAll);
+  const activePlaybackContext = useAudioEngineStore(state => state.activePlaybackContext);
+  const setTimelineLoopEnabled = useAudioEngineStore(state => state.setTimelineLoopEnabled);
 
   const [isMasterMuted, setIsMasterMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(1);
@@ -92,7 +98,6 @@ export function BottomPlayer() {
   }, [settings.output_device_id]);
 
   // Derive playing status - simple logic: anything playing means "active"
-  const playingCount = Array.from(sources.values()).filter(s => s.isPlaying).length;
   const isAnythingPlaying = (isTimelinePlaying && !isTimelinePaused) || playingCount > 0;
 
   const activeTimeline = timelines.find(t => t.id === selectedTimelineId);

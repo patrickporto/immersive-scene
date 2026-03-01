@@ -12,7 +12,7 @@ export function OutputDevicePicker() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { devices } = useAudioDevices();
-  const { setOutputDevice } = useAudioEngineStore();
+  const setOutputDevice = useAudioEngineStore(state => state.setOutputDevice);
   const { settings, updateSettings } = useSettingsStore();
 
   const selectedDeviceId = settings.output_device_id || '';
